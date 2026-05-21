@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/barrydeen/haven/pkg/nip05namecoin"
 	"github.com/joho/godotenv"
 	"github.com/nbd-wtf/go-nostr/nip19"
 )
@@ -62,6 +63,7 @@ type Config struct {
 	WotFetchTimeoutSeconds               int                 `json:"wot_fetch_timeout_seconds"`
 	WotRefreshInterval                   time.Duration       `json:"wot_refresh_interval"`
 	WhitelistedPubKeys                   map[string]struct{} `json:"whitelisted_pubkeys"`
+	WhitelistedNamecoinNames             map[string]struct{} `json:"whitelisted_namecoin_names"`
 	BlacklistedPubKeys                   map[string]struct{} `json:"blacklisted_pubkeys"`
 	LogLevel                             string              `json:"log_level"`
 	BlastrRelays                         []string            `json:"blastr_relays"`
@@ -114,6 +116,7 @@ func loadConfig() Config {
 		WotFetchTimeoutSeconds:               getEnvInt("WOT_FETCH_TIMEOUT_SECONDS", 30),
 		WotRefreshInterval:                   getEnvDuration("WOT_REFRESH_INTERVAL", 24*time.Hour),
 		WhitelistedPubKeys:                   getNpubsFromFile(getEnvString("WHITELISTED_NPUBS_FILE", "")),
+		WhitelistedNamecoinNames:             getNamesFromFile(getEnvString("WHITELISTED_NAMECOIN_NAMES_FILE", "")),
 		BlacklistedPubKeys:                   getNpubsFromFile(getEnvString("BLACKLISTED_NPUBS_FILE", "")),
 		LogLevel:                             getEnvString("HAVEN_LOG_LEVEL", "INFO"),
 		BlastrRelays:                         getRelayListFromFile(getEnv("BLASTR_RELAYS_FILE")),
@@ -123,6 +126,16 @@ func loadConfig() Config {
 
 	// Relay owner is always whitelisted
 	cfg.WhitelistedPubKeys[cfg.OwnerPubKey] = struct{}{}
+
+	// Resolve any configured Namecoin (.bit) names into pubkeys and
+	// merge them into the existing whitelist. Best-effort: failures
+	// log a warning but do not abort startup, so an operator can bring
+	// their pod online before the resolver succeeds.
+	nip05namecoin.ResolveNamesToPubkeys(
+		cfg.WhitelistedPubKeys,
+		cfg.WhitelistedNamecoinNames,
+		nip05namecoin.ResolveOptions{Logger: log.Default()},
+	)
 
 	return cfg
 
@@ -171,6 +184,19 @@ func getRelayListFromFile(filePath string) []string {
 		relayList[i] = relay
 	}
 	return relayList
+}
+
+// getNamesFromFile loads a JSON array of Namecoin (.bit) identifiers
+// from `filePath` and returns them as a set. Identifiers are kept as
+// strings (e.g. "me@me.bit", "d/me") and resolved later at startup.
+// Mirrors getNpubsFromFile: parse failures abort startup, since the
+// operator clearly intended to load a whitelist file.
+func getNamesFromFile(filePath string) map[string]struct{} {
+	names, err := nip05namecoin.LoadNamesFile(filePath)
+	if err != nil {
+		log.Fatalf("Failed to load Namecoin names file: %s", err)
+	}
+	return names
 }
 
 func getNpubsFromFile(filePath string) map[string]struct{} {

@@ -142,6 +142,18 @@ interaction with your relay.
 
 See the [Access Control Documentation](docs/access-control.md) for more details on how to set up whitelists and blacklists.
 
+#### Whitelisting by Namecoin (`.bit`) name
+
+As an additive opt-in alternative, you can whitelist users by their Namecoin (`.bit`) name instead of (or in
+addition to) their npub. Point `WHITELISTED_NAMECOIN_NAMES_FILE` at a JSON file containing `.bit` identifiers
+(e.g. `me@me.bit`, `d/example`, `id/alice`). At startup, Haven resolves each name to its underlying pubkey via
+public Namecoin ElectrumX servers and merges the result into the whitelist alongside `WHITELISTED_NPUBS_FILE`.
+
+Resolution is best-effort: if a name can't be resolved (no Namecoin record, ElectrumX unreachable, etc.) Haven
+logs a warning and keeps starting. If both `WHITELISTED_NPUBS_FILE` and `WHITELISTED_NAMECOIN_NAMES_FILE` are
+set, both contribute to the same in-memory whitelist. See `whitelisted_namecoin_names.example.json` for the
+file shape. Spec reference: [NIP-05 Namecoin extension](https://github.com/nostr-protocol/nips/pull/2349).
+
 ### 5. Run on System Startup
 
 #### Linux – Create a Systemd Service
