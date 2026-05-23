@@ -180,7 +180,7 @@ func TestParseNameScript(t *testing.T) {
 
 func TestExtractNostrFromValue_SimpleForm(t *testing.T) {
 	value := `{"nostr":"b0635d6a9851d3aed0cd6c495b282167acf761729078d975fc341b22650b07b9"}`
-	pubkey, relays, err := extractNostrFromValue(value, &ParsedIdentifier{"d/example", "_", true})
+	pubkey, relays, err := extractNostrFromValue(value, &ParsedIdentifier{"d/example", "_", true}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestExtractNostrFromValue_SimpleForm(t *testing.T) {
 		t.Errorf("expected no relays, got %v", relays)
 	}
 
-	if _, _, err := extractNostrFromValue(value, &ParsedIdentifier{"d/example", "alice", true}); err == nil {
+	if _, _, err := extractNostrFromValue(value, &ParsedIdentifier{"d/example", "alice", true}, nil); err == nil {
 		t.Error("expected error for simple-form + non-root local-part")
 	}
 }
@@ -208,14 +208,14 @@ func TestExtractNostrFromValue_ExtendedForm(t *testing.T) {
 	    }
 	  }
 	}`
-	pk, _, err := extractNostrFromValue(value, &ParsedIdentifier{"d/example", "_", true})
+	pk, _, err := extractNostrFromValue(value, &ParsedIdentifier{"d/example", "_", true}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if pk != "aaaa000000000000000000000000000000000000000000000000000000000001" {
 		t.Errorf("root pubkey = %q", pk)
 	}
-	pk, relays, err := extractNostrFromValue(value, &ParsedIdentifier{"d/example", "alice", true})
+	pk, relays, err := extractNostrFromValue(value, &ParsedIdentifier{"d/example", "alice", true}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestExtractNostrFromValue_ExtendedForm(t *testing.T) {
 
 func TestExtractNostrFromValue_FallbackToRoot(t *testing.T) {
 	value := `{"nostr":{"names":{"_":"aaaa000000000000000000000000000000000000000000000000000000000001"}}}`
-	pk, _, err := extractNostrFromValue(value, &ParsedIdentifier{"d/example", "nonexistent", true})
+	pk, _, err := extractNostrFromValue(value, &ParsedIdentifier{"d/example", "nonexistent", true}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestExtractNostrFromValue_FallbackToRoot(t *testing.T) {
 
 func TestExtractNostrFromValue_IdentityObject(t *testing.T) {
 	value := `{"nostr":{"pubkey":"dddd000000000000000000000000000000000000000000000000000000000004","relays":["wss://relay.id.example"]}}`
-	pk, relays, err := extractNostrFromValue(value, &ParsedIdentifier{"id/alice", "_", false})
+	pk, relays, err := extractNostrFromValue(value, &ParsedIdentifier{"id/alice", "_", false}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,12 +253,13 @@ func TestExtractNostrFromValue_IdentityObject(t *testing.T) {
 }
 
 func TestExtractNostrFromValue_RejectsInvalidPubkey(t *testing.T) {
-	if _, _, err := extractNostrFromValue(`{"nostr":"abcdef"}`, &ParsedIdentifier{"d/x", "_", true}); err == nil {
+	if _, _, err := extractNostrFromValue(`{"nostr":"abcdef"}`, &ParsedIdentifier{"d/x", "_", true}, nil); err == nil {
 		t.Error("expected error for short pubkey")
 	}
 	if _, _, err := extractNostrFromValue(
 		`{"nostr":"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"}`,
 		&ParsedIdentifier{"d/x", "_", true},
+		nil,
 	); err == nil {
 		t.Error("expected error for non-hex pubkey")
 	}

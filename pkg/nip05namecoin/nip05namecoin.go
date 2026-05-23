@@ -116,23 +116,40 @@ func ParseIdentifier(raw string) *ParsedIdentifier {
 // through from one to the other without reshaping their code.
 //
 // The context deadline is respected: ElectrumX calls honour the same
-// timeout the caller passed in.
+// timeout the caller passed in. Records using the ifa-0001 §"import"
+// chain (e.g. testls.bit, which splits its `nostr.names` block into
+// a sibling name) are transparently expanded before extraction.
 func QueryIdentifier(ctx context.Context, identifier string) (*nostr.ProfilePointer, error) {
+	return queryIdentifierWithLookup(ctx, identifier, nil)
+}
+
+// queryIdentifierWithLookup is the shared implementation behind
+// QueryIdentifier. When lookup is nil it builds a real ElectrumX
+// client and uses DefaultElectrumXServers; tests can pass a
+// hermetic in-memory lookup to exercise the import-chain wiring.
+func queryIdentifierWithLookup(ctx context.Context, identifier string, lookup nameValueLookup) (*nostr.ProfilePointer, error) {
 	parsed := ParseIdentifier(identifier)
 	if parsed == nil {
 		return nil, fmt.Errorf("nip05namecoin: not a Namecoin identifier: %q", identifier)
 	}
 
-	client := NewElectrumClient()
-	result, err := client.NameShowWithFallback(ctx, parsed.NamecoinName, DefaultElectrumXServers)
-	if err != nil {
-		return nil, err
+	if lookup == nil {
+		client := NewElectrumClient()
+		lookup = func(name string) string {
+			result, err := client.NameShowWithFallback(ctx, name, DefaultElectrumXServers)
+			if err != nil || result == nil {
+				return ""
+			}
+			return result.Value
+		}
 	}
-	if result == nil {
+
+	rootValue := lookup(parsed.NamecoinName)
+	if rootValue == "" {
 		return nil, ErrNameNotFound
 	}
 
-	pubkeyHex, relays, err := extractNostrFromValue(result.Value, parsed)
+	pubkeyHex, relays, err := extractNostrFromValue(rootValue, parsed, lookup)
 	if err != nil {
 		return nil, err
 	}
@@ -150,10 +167,29 @@ func QueryIdentifier(ctx context.Context, identifier string) (*nostr.ProfilePoin
 // the relevant nostr pubkey + relay list out of it. Supports both the
 // simple `"nostr": "hex"` form and the extended
 // `"nostr": { "names": {...}, "relays": {...} }` form used by Amethyst.
-func extractNostrFromValue(valueJSON string, parsed *ParsedIdentifier) (string, []string, error) {
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(valueJSON), &root); err != nil {
+//
+// Records using the ifa-0001 §"import" chain are expanded via
+// `lookup` before extraction; pass a nil lookup to disable import
+// expansion entirely (in which case records with an `import` key but
+// no inline `nostr` field will return the existing no-nostr-field
+// error, preserving pre-import-chain behaviour).
+func extractNostrFromValue(valueJSON string, parsed *ParsedIdentifier, lookup nameValueLookup) (string, []string, error) {
+	var rootGeneric map[string]any
+	if err := json.Unmarshal([]byte(valueJSON), &rootGeneric); err != nil {
 		return "", nil, fmt.Errorf("nip05namecoin: name value is not valid JSON: %w", err)
+	}
+	// Expand any ifa-0001 §"import" chain so the existing extractor
+	// sees a richer, fully-merged object. Records without an `import`
+	// key pay zero extra I/O cost (expandImports short-circuits).
+	if lookup != nil {
+		rootGeneric = expandImports(rootGeneric, lookup, DefaultMaxImportDepth)
+	}
+	// Re-encode to RawMessage so the rest of this function — which
+	// expects RawMessage values for selective decoding — keeps
+	// working without further changes.
+	root, err := toRawMessageMap(rootGeneric)
+	if err != nil {
+		return "", nil, fmt.Errorf("nip05namecoin: re-encode merged name value: %w", err)
 	}
 	nostrRaw, ok := root["nostr"]
 	if !ok {
@@ -245,6 +281,22 @@ func extractFromIdentityObject(obj map[string]json.RawMessage, parsed *ParsedIde
 
 	_ = parsed
 	return "", nil, errors.New("nip05namecoin: id/ nostr object has no valid pubkey")
+}
+
+// toRawMessageMap re-encodes a generic decoded object as a
+// map[string]json.RawMessage so the rest of the extractor (which
+// uses RawMessage for selective decoding) can keep its existing
+// shape.
+func toRawMessageMap(in map[string]any) (map[string]json.RawMessage, error) {
+	out := make(map[string]json.RawMessage, len(in))
+	for k, v := range in {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		out[k] = b
+	}
+	return out, nil
 }
 
 func extractRelays(obj map[string]json.RawMessage, pubkey string) []string {
