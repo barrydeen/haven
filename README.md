@@ -88,8 +88,10 @@ Check out some of the external community-built tools for managing Haven relays:
    your Haven relay with a native GUI and a ton of extra features
 3. [**Haven Start9 Wrapper**](https://github.com/higedamc/haven-start9-wrapper): A Tor-only Start9 wrapper for Haven 
    with its own Dashboard and Web UI
-4. [**HAVEN Kit**](https://github.com/Letdown2491/haven-kit): Simple configuration tool to set up a HAVEN Nostr 
-   relay in Umbrel Docker or Podman with just a few clicks 
+4. [**HAVEN Kit**](https://github.com/Letdown2491/haven-kit): Set up a HAVEN Nostr relay with just a few clicks 
+   and no manual `.env` editing. Includes a web-based configuration UI for Docker, Podman, and 
+   [Umbrel](https://github.com/Letdown2491/haven-kit-umbrel) installs (via community app store), while the 
+   [StartOS](https://github.com/Letdown2491/haven-kit-startos) package is configured natively through StartOS Actions.
 
 If you have built a Haven relay management tool that you would like to share, please open a PR to add it to this list!
 
