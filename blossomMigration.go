@@ -12,7 +12,7 @@ func migrateBlossomMetadata(ctx context.Context, bl *blossom.BlossomServer) {
 	outboxDBWrapper := blossom.EventStoreBlobIndexWrapper{Store: outboxDB, ServiceURL: getHTTPScheme(config.RelayURL) + config.RelayURL}
 
 	// List all BlobDescriptor for the relay owner pubkey
-	ownerPubkey := nPubToPubkey(config.OwnerNpub)
+	ownerPubkey := nPubToPubkey("OWNER_NPUB", config.OwnerNpub)
 	blobsChan, err := outboxDBWrapper.List(ctx, ownerPubkey)
 	if err != nil {
 		slog.Error("🚫 Failed to list blobs", "error", err)

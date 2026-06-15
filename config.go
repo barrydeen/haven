@@ -76,7 +76,7 @@ func loadConfig() Config {
 
 	cfg := Config{
 		OwnerNpub:                            getEnv("OWNER_NPUB"),
-		OwnerPubKey:                          nPubToPubkey(getEnv("OWNER_NPUB")),
+		OwnerPubKey:                          nPubToPubkey("OWNER_NPUB", getEnv("OWNER_NPUB")),
 		DBEngine:                             getEnvString("DB_ENGINE", "lmdb"),
 		LmdbMapSize:                          getEnvInt64("LMDB_MAPSIZE", 0),
 		BlossomPath:                          getEnvString("BLOSSOM_PATH", "blossom"),
@@ -191,7 +191,7 @@ func getNpubsFromFile(filePath string) map[string]struct{} {
 
 	for _, npub := range npubs {
 		npub = strings.TrimSpace(npub)
-		pubKeys[nPubToPubkey(npub)] = struct{}{}
+		pubKeys[nPubToPubkey(filePath, npub)] = struct{}{}
 	}
 	return pubKeys
 }
@@ -215,7 +215,7 @@ func getEnvInt(key string, defaultValue int) int {
 	if value, ok := os.LookupEnv(key); ok {
 		intValue, err := strconv.Atoi(value)
 		if err != nil {
-			panic(err)
+			log.Fatalf("invalid value for %s: %q is not an integer (%v)", key, value, err)
 		}
 		return intValue
 	}
@@ -226,7 +226,7 @@ func getEnvInt64(key string, defaultValue int64) int64 {
 	if value, ok := os.LookupEnv(key); ok {
 		intValue, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
-			panic(err)
+			log.Fatalf("invalid value for %s: %q is not an integer (%v)", key, value, err)
 		}
 		return intValue
 	}
@@ -237,7 +237,7 @@ func getEnvBool(key string, defaultValue bool) bool {
 	if value, ok := os.LookupEnv(key); ok {
 		boolValue, err := strconv.ParseBool(value)
 		if err != nil {
-			panic(err)
+			log.Fatalf("invalid value for %s: %q is not a boolean (%v)", key, value, err)
 		}
 		return boolValue
 	}
@@ -248,19 +248,34 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 	if value, ok := os.LookupEnv(key); ok {
 		durationValue, err := time.ParseDuration(value)
 		if err != nil {
-			panic(err)
+			log.Fatalf("invalid value for %s: %q is not a duration (%v)", key, value, err)
 		}
 		return durationValue
 	}
 	return defaultValue
 }
 
-func nPubToPubkey(nPub string) string {
-	_, v, err := nip19.Decode(nPub)
+// nPubToPubkey decodes a bech32 npub into its hex public key. label identifies
+// the source of the value (an env var name or file path) so a mistyped npub
+// produces an actionable error instead of a status-2 panic crash-loop.
+func nPubToPubkey(label, nPub string) string {
+	prefix, v, err := nip19.Decode(nPub)
 	if err != nil {
-		panic(err)
+		// Only echo the raw value when it looks like an npub; a malformed
+		// non-npub (e.g. a mistyped nsec) must not be leaked into logs.
+		if strings.HasPrefix(nPub, "npub1") {
+			log.Fatalf("invalid npub for %s: %q could not be decoded (%v)", label, nPub, err)
+		}
+		log.Fatalf("invalid npub for %s: value could not be decoded as an npub (%v)", label, err)
 	}
-	return v.(string)
+	if prefix != "npub" {
+		log.Fatalf("invalid npub for %s: expected an npub, got a %q", label, prefix)
+	}
+	pubkey, ok := v.(string)
+	if !ok {
+		log.Fatalf("invalid npub for %s: %q did not decode to a public key", label, nPub)
+	}
+	return pubkey
 }
 
 var art = `

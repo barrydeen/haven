@@ -125,7 +125,7 @@ func initRelays(ctx context.Context) {
 	initRelayLimits()
 
 	privateRelay.Info.Name = config.PrivateRelayName
-	privateRelay.Info.PubKey = nPubToPubkey(config.PrivateRelayNpub)
+	privateRelay.Info.PubKey = nPubToPubkey("PRIVATE_RELAY_NPUB", config.PrivateRelayNpub)
 	privateRelay.Info.Description = config.PrivateRelayDescription
 	privateRelay.Info.Icon = config.PrivateRelayIcon
 	privateRelay.Info.Version = config.RelayVersion
@@ -177,7 +177,7 @@ func initRelays(ctx context.Context) {
 			RelayURL         string
 		}{
 			RelayName:        config.PrivateRelayName,
-			RelayPubkey:      nPubToPubkey(config.PrivateRelayNpub),
+			RelayPubkey:      nPubToPubkey("PRIVATE_RELAY_NPUB", config.PrivateRelayNpub),
 			RelayDescription: config.PrivateRelayDescription,
 			RelayURL:         getWSScheme(config.RelayURL) + config.RelayURL + "/private",
 		}
@@ -188,7 +188,7 @@ func initRelays(ctx context.Context) {
 	})
 
 	chatRelay.Info.Name = config.ChatRelayName
-	chatRelay.Info.PubKey = nPubToPubkey(config.ChatRelayNpub)
+	chatRelay.Info.PubKey = nPubToPubkey("CHAT_RELAY_NPUB", config.ChatRelayNpub)
 	chatRelay.Info.Description = config.ChatRelayDescription
 	chatRelay.Info.Icon = config.ChatRelayIcon
 	chatRelay.Info.Version = config.RelayVersion
@@ -242,7 +242,7 @@ func initRelays(ctx context.Context) {
 			RelayURL         string
 		}{
 			RelayName:        config.ChatRelayName,
-			RelayPubkey:      nPubToPubkey(config.ChatRelayNpub),
+			RelayPubkey:      nPubToPubkey("CHAT_RELAY_NPUB", config.ChatRelayNpub),
 			RelayDescription: config.ChatRelayDescription,
 			RelayURL:         getWSScheme(config.RelayURL) + config.RelayURL + "/chat",
 		}
@@ -253,7 +253,7 @@ func initRelays(ctx context.Context) {
 	})
 
 	outboxRelay.Info.Name = config.OutboxRelayName
-	outboxRelay.Info.PubKey = nPubToPubkey(config.OutboxRelayNpub)
+	outboxRelay.Info.PubKey = nPubToPubkey("OUTBOX_RELAY_NPUB", config.OutboxRelayNpub)
 	outboxRelay.Info.Description = config.OutboxRelayDescription
 	outboxRelay.Info.Icon = config.OutboxRelayIcon
 	outboxRelay.Info.Version = config.RelayVersion
@@ -306,7 +306,7 @@ func initRelays(ctx context.Context) {
 			RelayURL         string
 		}{
 			RelayName:        config.OutboxRelayName,
-			RelayPubkey:      nPubToPubkey(config.OutboxRelayNpub),
+			RelayPubkey:      nPubToPubkey("OUTBOX_RELAY_NPUB", config.OutboxRelayNpub),
 			RelayDescription: config.OutboxRelayDescription,
 			RelayURL:         getWSScheme(config.RelayURL) + config.RelayURL + "/outbox",
 		}
@@ -347,7 +347,7 @@ func initRelays(ctx context.Context) {
 	migrateBlossomMetadata(ctx, bl)
 
 	inboxRelay.Info.Name = config.InboxRelayName
-	inboxRelay.Info.PubKey = nPubToPubkey(config.InboxRelayNpub)
+	inboxRelay.Info.PubKey = nPubToPubkey("INBOX_RELAY_NPUB", config.InboxRelayNpub)
 	inboxRelay.Info.Description = config.InboxRelayDescription
 	inboxRelay.Info.Icon = config.InboxRelayIcon
 	inboxRelay.Info.Version = config.RelayVersion
@@ -399,7 +399,7 @@ func initRelays(ctx context.Context) {
 			RelayURL         string
 		}{
 			RelayName:        config.InboxRelayName,
-			RelayPubkey:      nPubToPubkey(config.InboxRelayNpub),
+			RelayPubkey:      nPubToPubkey("INBOX_RELAY_NPUB", config.InboxRelayNpub),
 			RelayDescription: config.InboxRelayDescription,
 			RelayURL:         getWSScheme(config.RelayURL) + config.RelayURL + "/inbox",
 		}
