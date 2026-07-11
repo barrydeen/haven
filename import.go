@@ -11,8 +11,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/fiatjaf/eventstore"
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 
 	"github.com/barrydeen/haven/pkg/wot"
 )
@@ -72,7 +71,6 @@ func runImport(ctx context.Context) {
 func importOwnerNotes(ctx context.Context) {
 	ownerImportedNotes := 0
 	nFailedImportNotes := 0
-	wdb := eventstore.RelayWrapper{Store: outboxDB}
 
 	startTime, err := time.Parse(layout, config.ImportStartDate)
 	if err != nil {
@@ -84,11 +82,15 @@ func importOwnerNotes(ctx context.Context) {
 	for {
 		startTimestamp := nostr.Timestamp(startTime.Unix())
 		endTimestamp := nostr.Timestamp(endTime.Unix())
+		authors := make([]nostr.PubKey, 0, len(config.WhitelistedPubKeys))
+		for pubkeyHex := range config.WhitelistedPubKeys {
+			authors = append(authors, nostr.MustPubKeyFromHex(pubkeyHex))
+		}
 
 		filter := nostr.Filter{
-			Authors: slices.Collect(maps.Keys(config.WhitelistedPubKeys)),
-			Since:   &startTimestamp,
-			Until:   &endTimestamp,
+			Authors: authors,
+			Since:   startTimestamp,
+			Until:   endTimestamp,
 		}
 
 		done := make(chan int, 1)
@@ -99,16 +101,16 @@ func importOwnerNotes(ctx context.Context) {
 			defer cancel()
 			batchImportedNotes := 0
 
-			events := pool.FetchMany(ctx, config.ImportSeedRelays, filter)
+			events := pool.FetchMany(ctx, config.ImportSeedRelays, filter, nostr.SubscriptionOptions{})
 			for ev := range events {
 				if ctx.Err() != nil {
 					break // Stop the loop on timeout
 				}
-				if _, ok := config.BlacklistedPubKeys[ev.PubKey]; ok {
+				if _, ok := config.BlacklistedPubKeys[ev.PubKey.Hex()]; ok {
 					slog.Debug("🚫 skipping event from blacklisted pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 					continue
 				}
-				if err := wdb.Publish(ctx, *ev.Event); err != nil {
+				if err := outboxDB.SaveEvent(ev.Event); err != nil {
 					log.Println("🚫  error importing note", ev.ID, ":", err)
 					nFailedImportNotes++
 				}
@@ -152,8 +154,8 @@ func importTaggedNotes(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	wdbInbox := eventstore.RelayWrapper{Store: inboxDB}
-	wdbChat := eventstore.RelayWrapper{Store: chatDB}
+	inboxStore := inboxDB
+	chatStore := chatDB
 	filter := nostr.Filter{
 		Tags: nostr.TagMap{
 			"p": slices.Collect(maps.Keys(config.WhitelistedPubKeys)),
@@ -163,18 +165,18 @@ func importTaggedNotes(ctx context.Context) {
 	log.Println("📦 importing inbox notes, please wait up to", timeout)
 
 	go func() {
-		events := pool.FetchMany(ctx, config.ImportSeedRelays, filter)
+		events := pool.FetchMany(ctx, config.ImportSeedRelays, filter, nostr.SubscriptionOptions{})
 		for ev := range events {
 			if ctx.Err() != nil {
 				break // Stop the loop on timeout
 			}
 
-			if _, ok := config.BlacklistedPubKeys[ev.PubKey]; ok {
+			if _, ok := config.BlacklistedPubKeys[ev.PubKey.Hex()]; ok {
 				slog.Debug("🚫 skipping tagged event from blacklisted pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 				continue
 			}
 
-			if !wot.GetInstance().Has(ctx, ev.PubKey) && ev.Kind != nostr.KindGiftWrap {
+			if !wot.GetInstance().Has(ctx, ev.PubKey.Hex()) && ev.Kind != nostr.KindGiftWrap {
 				continue
 			}
 			for tag := range ev.Tags.FindAll("p") {
@@ -182,11 +184,11 @@ func importTaggedNotes(ctx context.Context) {
 					continue
 				}
 				if _, ok := config.WhitelistedPubKeys[tag[1]]; ok {
-					dbToWrite := wdbInbox
+					dbToWrite := inboxStore
 					if ev.Kind == nostr.KindGiftWrap {
-						dbToWrite = wdbChat
+						dbToWrite = chatStore
 					}
-					if err := dbToWrite.Publish(ctx, *ev.Event); err != nil {
+					if err := dbToWrite.SaveEvent(ev.Event); err != nil {
 						log.Println("🚫 error importing tagged note", ev.ID, ":", err)
 					}
 					taggedImportedNotes++
@@ -207,24 +209,22 @@ func importTaggedNotes(ctx context.Context) {
 }
 
 func subscribeInboxAndChat(ctx context.Context) {
-	wdbInbox := eventstore.RelayWrapper{Store: inboxDB}
-	wdbChat := eventstore.RelayWrapper{Store: chatDB}
 	startTime := nostr.Timestamp(time.Now().Add(-time.Minute * 5).Unix())
 	filter := nostr.Filter{
 		Tags: nostr.TagMap{
 			"p": slices.Collect(maps.Keys(config.WhitelistedPubKeys)),
 		},
-		Since: &startTime,
+		Since: startTime,
 	}
 
 	log.Println("📢 subscribing to inbox")
 
-	for ev := range pool.SubscribeMany(ctx, config.ImportSeedRelays, filter) {
-		if _, ok := config.BlacklistedPubKeys[ev.PubKey]; ok {
+	for ev := range pool.SubscribeMany(ctx, config.ImportSeedRelays, filter, nostr.SubscriptionOptions{}) {
+		if _, ok := config.BlacklistedPubKeys[ev.PubKey.Hex()]; ok {
 			slog.Debug("🚫discarding imported note from blacklisted pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 			continue
 		}
-		if !wot.GetInstance().Has(ctx, ev.PubKey) && ev.Kind != nostr.KindGiftWrap {
+		if !wot.GetInstance().Has(ctx, ev.PubKey.Hex()) && ev.Kind != nostr.KindGiftWrap {
 			continue
 		}
 		for tag := range ev.Tags.FindAll("p") {
@@ -232,9 +232,9 @@ func subscribeInboxAndChat(ctx context.Context) {
 				continue
 			}
 			if _, ok := config.WhitelistedPubKeys[tag[1]]; ok {
-				dbToPublish := wdbInbox
+				dbToPublish := inboxDB
 				if ev.Kind == nostr.KindGiftWrap {
-					dbToPublish = wdbChat
+					dbToPublish = chatDB
 				}
 
 				slog.Debug("ℹ️ importing event", "kind", ev.Kind, "id", ev.ID, "relay", ev.Relay.URL)
@@ -244,7 +244,7 @@ func subscribeInboxAndChat(ctx context.Context) {
 					break // Avoid re-importing duplicates
 				}
 
-				if err := dbToPublish.Publish(ctx, *ev.Event); err != nil {
+				if err := dbToPublish.SaveEvent(ev.Event); err != nil {
 					log.Println("🚫 error importing tagged note", ev.ID, ":", "from relay", ev.Relay.URL, ":", err)
 					break
 				}
@@ -272,18 +272,16 @@ func subscribeInboxAndChat(ctx context.Context) {
 	}
 }
 
-func isDuplicate(ctx context.Context, db eventstore.RelayWrapper, event *nostr.Event) bool {
+func isDuplicate(ctx context.Context, db DBBackend, event nostr.Event) bool {
 	filter := nostr.Filter{
-		IDs:   []string{event.ID},
-		Since: &event.CreatedAt,
+		IDs:   []nostr.ID{event.ID},
+		Since: event.CreatedAt,
 		Limit: 1,
 	}
 
-	events, err := db.QuerySync(ctx, filter)
-	if err != nil {
-		log.Println("🚫 error querying for event", event.ID, ":", err)
-		return false
+	for range db.QueryEvents(filter, 1) {
+		return true
 	}
 
-	return len(events) > 0
+	return false
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/fiatjaf/khatru/blossom"
+	"fiatjaf.com/nostr/khatru/blossom"
+	nipb0blossom "fiatjaf.com/nostr/nipb0/blossom"
+	"fiatjaf.com/nostr"
 )
 
 func migrateBlossomMetadata(ctx context.Context, bl *blossom.BlossomServer) {
@@ -12,14 +14,9 @@ func migrateBlossomMetadata(ctx context.Context, bl *blossom.BlossomServer) {
 	outboxDBWrapper := blossom.EventStoreBlobIndexWrapper{Store: outboxDB, ServiceURL: getHTTPScheme(config.RelayURL) + config.RelayURL}
 
 	// List all BlobDescriptor for the relay owner pubkey
-	ownerPubkey := nPubToPubkey("OWNER_NPUB", config.OwnerNpub)
-	blobsChan, err := outboxDBWrapper.List(ctx, ownerPubkey)
-	if err != nil {
-		slog.Error("🚫 Failed to list blobs", "error", err)
-		return
-	}
-	var blobs []blossom.BlobDescriptor
-	for blob := range blobsChan {
+	ownerPubkey := nostr.MustPubKeyFromHex(config.OwnerPubKey)
+	var blobs []nipb0blossom.BlobDescriptor
+	for blob := range outboxDBWrapper.List(ctx, ownerPubkey) {
 		blobs = append(blobs, blob)
 	}
 
@@ -29,7 +26,7 @@ func migrateBlossomMetadata(ctx context.Context, bl *blossom.BlossomServer) {
 	}
 
 	// Create a map to track migrated blobs
-	migrated := make(map[string]blossom.BlobDescriptor, len(blobs))
+	migrated := make(map[string]nipb0blossom.BlobDescriptor, len(blobs))
 
 	slog.Info("BlobDescriptors will be migrated from Outbox to Blossom's DB", "count", len(blobs))
 

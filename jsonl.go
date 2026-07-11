@@ -3,7 +3,6 @@ package main
 import (
 	"archive/zip"
 	"bufio"
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fiatjaf/eventstore"
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/eventstore"
 )
 
 func (z *zipWriter) close() {
@@ -186,7 +185,7 @@ func importDB(ctx context.Context, db DBBackend, r io.Reader) error {
 			return err
 		}
 
-		if err := db.SaveEvent(ctx, &event); err != nil {
+		if err := db.SaveEvent(event); err != nil {
 			if errors.Is(err, eventstore.ErrDupEvent) {
 				slog.Debug("⏭️ skipping duplicate event", "id", event.ID)
 				continue
@@ -209,7 +208,7 @@ func exportDB(ctx context.Context, db DBBackend, w io.Writer) error {
 	var lastTimestamp nostr.Timestamp
 	count := 0
 
-	var eventBuffer []*nostr.Event
+	var eventBuffer []nostr.Event
 
 	flushBuffer := func() error {
 		for _, e := range eventBuffer {
@@ -227,13 +226,10 @@ func exportDB(ctx context.Context, db DBBackend, w io.Writer) error {
 			Limit: limit,
 		}
 		if lastTimestamp != 0 {
-			filter.Until = &lastTimestamp
+			filter.Until = lastTimestamp
 		}
 
-		events, err := db.QueryEvents(ctx, filter)
-		if err != nil {
-			return err
-		}
+		events := db.QueryEvents(filter, limit)
 
 		initialCount := count
 		initialBufferSize := len(eventBuffer)
@@ -255,8 +251,8 @@ func exportDB(ctx context.Context, db DBBackend, w io.Writer) error {
 			// 2. Roundtrip consistency is maintained when importing back into a DB, even
 			//    if the original source had duplicates (e.g. due to bugs in older versions
 			//    of eventstore and khatru).
-			pos, found := slices.BinarySearchFunc(eventBuffer, event, func(a, b *nostr.Event) int {
-				return cmp.Compare(a.ID, b.ID)
+			pos, found := slices.BinarySearchFunc(eventBuffer, event, func(a, b nostr.Event) int {
+				return nostr.CompareEvent(a, b)
 			})
 			if !found {
 				eventBuffer = slices.Insert(eventBuffer, pos, event)

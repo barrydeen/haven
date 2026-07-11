@@ -11,7 +11,8 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/nbd-wtf/go-nostr/nip19"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip19"
 )
 
 type S3Config struct {
@@ -66,6 +67,7 @@ type Config struct {
 	LogLevel                             string              `json:"log_level"`
 	BlastrRelays                         []string            `json:"blastr_relays"`
 	BlastrTimeoutSeconds                 int                 `json:"blastr_timeout_seconds"`
+	ProxyURL                             string              `json:"proxy_url"`
 	S3Config                             *S3Config           `json:"s3_config"`
 }
 
@@ -118,6 +120,7 @@ func loadConfig() Config {
 		LogLevel:                             getEnvString("HAVEN_LOG_LEVEL", "INFO"),
 		BlastrRelays:                         getRelayListFromFile(getEnv("BLASTR_RELAYS_FILE")),
 		BlastrTimeoutSeconds:                 getEnvInt("BLASTR_TIMEOUT_SECONDS", 5),
+		ProxyURL:                             getEnvString("PROXY_URL", ""),
 		S3Config:                             getS3Config(),
 	}
 
@@ -166,7 +169,11 @@ func getRelayListFromFile(filePath string) []string {
 	for i, relay := range relayList {
 		relay = strings.TrimSpace(relay)
 		if !strings.HasPrefix(relay, "wss://") && !strings.HasPrefix(relay, "ws://") {
-			relay = "wss://" + relay
+			if strings.Contains(relay, ".onion") {
+				relay = "ws://" + relay
+			} else {
+				relay = "wss://" + relay
+			}
 		}
 		relayList[i] = relay
 	}
@@ -261,8 +268,6 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 func nPubToPubkey(label, nPub string) string {
 	prefix, v, err := nip19.Decode(nPub)
 	if err != nil {
-		// Only echo the raw value when it looks like an npub; a malformed
-		// non-npub (e.g. a mistyped nsec) must not be leaked into logs.
 		if strings.HasPrefix(nPub, "npub1") {
 			log.Fatalf("invalid npub for %s: %q could not be decoded (%v)", label, nPub, err)
 		}
@@ -271,11 +276,15 @@ func nPubToPubkey(label, nPub string) string {
 	if prefix != "npub" {
 		log.Fatalf("invalid npub for %s: expected an npub, got a %q", label, prefix)
 	}
-	pubkey, ok := v.(string)
-	if !ok {
+	switch value := v.(type) {
+	case string:
+		return value
+	case nostr.PubKey:
+		return value.Hex()
+	default:
 		log.Fatalf("invalid npub for %s: %q did not decode to a public key", label, nPub)
+		return ""
 	}
-	return pubkey
 }
 
 var art = `

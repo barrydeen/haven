@@ -4,14 +4,14 @@ import (
 	"context"
 	"log/slog"
 
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/khatru"
 	"github.com/barrydeen/haven/pkg/wot"
-	"github.com/fiatjaf/khatru"
-	"github.com/nbd-wtf/go-nostr"
 )
 
 func MustBeWhitelistedToQuery(ctx context.Context, _ nostr.Filter) (bool, string) {
-	authenticatedUser := khatru.GetAuthed(ctx)
-	if _, ok := config.WhitelistedPubKeys[authenticatedUser]; !ok {
+	authenticatedUser, _ := khatru.GetAuthed(ctx)
+	if _, ok := config.WhitelistedPubKeys[authenticatedUser.Hex()]; !ok {
 		slog.Debug("🚫 query rejected: user is not whitelisted", "user", authenticatedUser)
 		return true, "restricted: you must be whitelisted to query this relay"
 	}
@@ -19,8 +19,8 @@ func MustBeWhitelistedToQuery(ctx context.Context, _ nostr.Filter) (bool, string
 }
 
 func MustBeInWotToQuery(ctx context.Context, _ nostr.Filter) (bool, string) {
-	authenticatedUser := khatru.GetAuthed(ctx)
-	if !wot.GetInstance().Has(ctx, authenticatedUser) {
+	authenticatedUser, _ := khatru.GetAuthed(ctx)
+	if !wot.GetInstance().Has(ctx, authenticatedUser.Hex()) {
 		slog.Debug("🚫 query rejected: user is not in the web of trust", "user", authenticatedUser)
 		return true, "restricted: you must be in the web of trust to query this relay"
 	}
@@ -29,14 +29,14 @@ func MustBeInWotToQuery(ctx context.Context, _ nostr.Filter) (bool, string) {
 
 func MustBeWhitelistedToPost(ctx context.Context, event *nostr.Event) (bool, string) {
 	// Event from a whitelisted pubkey can always be posted, even if the user is not authenticated
-	if _, ok := config.WhitelistedPubKeys[event.PubKey]; ok {
+	if _, ok := config.WhitelistedPubKeys[event.PubKey.Hex()]; ok {
 		return false, ""
 	}
-	authenticatedUser := khatru.GetAuthed(ctx)
-	if authenticatedUser == "" {
+	authenticatedUser, ok := khatru.GetAuthed(ctx)
+	if !ok {
 		return true, "auth-required: you must be authenticated to post to this relay"
 	}
-	if _, ok := config.WhitelistedPubKeys[authenticatedUser]; !ok {
+	if _, ok := config.WhitelistedPubKeys[authenticatedUser.Hex()]; !ok {
 		slog.Debug("🚫 event rejected: user is not whitelisted", "event", event.ID, "pubkey", authenticatedUser)
 		return true, "restricted: you must be whitelisted to post to this relay"
 	}
@@ -45,14 +45,14 @@ func MustBeWhitelistedToPost(ctx context.Context, event *nostr.Event) (bool, str
 
 func MustBeInWotToPost(ctx context.Context, event *nostr.Event) (bool, string) {
 	// Event from a pubkey in the WoT can always be posted, even if the user is not authenticated
-	if wot.GetInstance().Has(ctx, event.PubKey) {
+	if wot.GetInstance().Has(ctx, event.PubKey.Hex()) {
 		return false, ""
 	}
-	authenticatedUser := khatru.GetAuthed(ctx)
-	if authenticatedUser == "" {
+	authenticatedUser, ok := khatru.GetAuthed(ctx)
+	if !ok {
 		return true, "auth-required: you must be authenticated to post to this relay"
 	}
-	if !wot.GetInstance().Has(ctx, authenticatedUser) {
+	if !wot.GetInstance().Has(ctx, authenticatedUser.Hex()) {
 		slog.Debug("🚫 event rejected: user is not in web of trust", "event", event.ID, "pubkey", authenticatedUser)
 		return true, "you must be in the web of trust to post to this relay"
 	}
@@ -61,23 +61,23 @@ func MustBeInWotToPost(ctx context.Context, event *nostr.Event) (bool, string) {
 
 func MustNotBeBlacklistedToPost(ctx context.Context, event *nostr.Event) (bool, string) {
 	// Events from a blacklisted pubkey ARE always rejected
-	if _, ok := config.BlacklistedPubKeys[event.PubKey]; ok {
+	if _, ok := config.BlacklistedPubKeys[event.PubKey.Hex()]; ok {
 		slog.Debug("🚫 event rejected: event author is blacklisted", "event", event.ID, "pubkey", event.PubKey)
 		return true, "you are blacklisted from this relay"
 	}
 	// Still need auth due to GiftWrap and other events with random pubkeys
-	authenticatedUser := khatru.GetAuthed(ctx)
-	if authenticatedUser == "" {
+	authenticatedUser, ok := khatru.GetAuthed(ctx)
+	if !ok {
 		return true, "auth-required: you must be authenticated to post to this relay"
 	}
-	if _, ok := config.BlacklistedPubKeys[authenticatedUser]; ok {
+	if _, ok := config.BlacklistedPubKeys[authenticatedUser.Hex()]; ok {
 		slog.Debug("🚫 event rejected: authenticated user is blacklisted", "event", event.ID, "pubkey", authenticatedUser)
 		return true, "you are blacklisted from this relay"
 	}
 	return false, ""
 }
 
-var allowedChatKinds = map[int]struct{}{
+var allowedChatKinds = map[nostr.Kind]struct{}{
 	// Regular kinds
 	nostr.KindSimpleGroupChatMessage:   {},
 	nostr.KindSimpleGroupThreadedReply: {},

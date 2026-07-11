@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/puzpuzpuz/xsync/v4"
 )
 
@@ -20,7 +20,7 @@ type SimpleInMemory struct {
 	pubkeys atomic.Pointer[map[string]bool]
 
 	// Dependencies for Refresh
-	Pool               *nostr.SimplePool
+	Pool               *nostr.Pool
 	WhitelistedPubKeys map[string]struct{}
 	SeedRelays         []string
 	WotDepth           int
@@ -28,7 +28,7 @@ type SimpleInMemory struct {
 	WotFetchTimeout    int
 }
 
-func NewSimpleInMemory(pool *nostr.SimplePool, whitelistedPubKeys map[string]struct{}, seedRelays []string, wotDepth int, minFollowers int, wotFetchTimeout int) *SimpleInMemory {
+func NewSimpleInMemory(pool *nostr.Pool, whitelistedPubKeys map[string]struct{}, seedRelays []string, wotDepth int, minFollowers int, wotFetchTimeout int) *SimpleInMemory {
 	return &SimpleInMemory{
 		Pool:               pool,
 		WhitelistedPubKeys: whitelistedPubKeys,
@@ -97,13 +97,15 @@ func (wt *SimpleInMemory) Refresh(ctx context.Context) {
 	defer cancel()
 
 	filter := nostr.Filter{
-		Authors: slices.Collect(maps.Keys(wt.WhitelistedPubKeys)),
-		Kinds:   []int{nostr.KindFollowList},
+		Kinds: []nostr.Kind{nostr.KindFollowList},
+	}
+	for pubkeyHex := range wt.WhitelistedPubKeys {
+		filter.Authors = append(filter.Authors, nostr.MustPubKeyFromHex(pubkeyHex))
 	}
 
 	slog.Info("🛜 fetching Nostr events to build WoT")
 
-	events := wt.Pool.FetchMany(timeoutCtx, wt.SeedRelays, filter)
+	events := wt.Pool.FetchMany(timeoutCtx, wt.SeedRelays, filter, nostr.SubscriptionOptions{})
 	for ev := range latestEventByKindAndPubkey(timeoutCtx, events, &eventsAnalysed) {
 		for contact := range ev.Tags.FindAll("p") {
 			if len(contact) > 1 {
@@ -127,16 +129,20 @@ func (wt *SimpleInMemory) Refresh(ctx context.Context) {
 	processBatch := func(pubkeys []string) {
 		timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 		done := make(chan struct{})
+		authors := make([]nostr.PubKey, 0, len(pubkeys))
+		for _, pubkey := range pubkeys {
+			authors = append(authors, nostr.MustPubKeyFromHex(pubkey))
+		}
 
 		filter := nostr.Filter{
-			Authors: pubkeys,
-			Kinds:   []int{nostr.KindFollowList, nostr.KindRelayListMetadata},
+			Authors: authors,
+			Kinds:   []nostr.Kind{nostr.KindFollowList, nostr.KindRelayListMetadata},
 		}
 
 		go func() {
 			defer cancel()
 
-			events := wt.Pool.FetchMany(timeoutCtx, wt.SeedRelays, filter)
+			events := wt.Pool.FetchMany(timeoutCtx, wt.SeedRelays, filter, nostr.SubscriptionOptions{})
 			for ev := range latestEventByKindAndPubkey(timeoutCtx, events, &eventsAnalysed) {
 				for contact := range ev.Tags.FindAll("p") {
 					if len(contact) > 1 {
