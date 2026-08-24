@@ -60,6 +60,25 @@ otherwise be allowed by the Web of Trust.
    BLACKLISTED_NPUBS_FILE=blacklisted_npubs.json
    ```
 
+## Deleting Events
+
+The relay owner (`OWNER_NPUB`) can delete **any** event stored on their relay by publishing a
+[NIP-09](https://github.com/nostr-protocol/nips/blob/master/09.md) delete request (kind 5) to it, even when the event
+was written by somebody else. Everybody else can only delete their own events.
+
+A delete request applies to the relay it is sent to, so publish it to the endpoint that holds the event, for example:
+
+```sh
+nak event -k 5 -t e=<event-id> --sec <owner-nsec> wss://your.relay/inbox
+```
+
+Deletions stick: the delete request is kept, and the deleted event is refused if anybody tries to publish it again or
+if it shows up while importing from your seed relays.
+
+> [!NOTE]
+> Deleting an event only removes it from your Haven relay. Copies on other relays are unaffected, though a delete
+> request published to your outbox relay is blasted onwards like any other event.
+
 ---
 
 [README](../README.md)

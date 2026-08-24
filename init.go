@@ -148,6 +148,7 @@ func initRelays(ctx context.Context) {
 			privateRelayLimits.EventIPLimiterMaxTokens,
 		),
 		MustBeWhitelistedToPost,
+		MustNotBeDeleted(privateDB),
 	)
 
 	privateRelay.RejectConnection = append(privateRelay.RejectConnection,
@@ -163,6 +164,7 @@ func initRelays(ctx context.Context) {
 	privateRelay.StoreEvent = append(privateRelay.StoreEvent, privateDB.SaveEvent)
 	privateRelay.QueryEvents = append(privateRelay.QueryEvents, privateDB.QueryEvents)
 	privateRelay.DeleteEvent = append(privateRelay.DeleteEvent, privateDB.DeleteEvent)
+	privateRelay.OverwriteDeletionOutcome = append(privateRelay.OverwriteDeletionOutcome, OwnerCanDeleteAnyEvent)
 	privateRelay.CountEvents = append(privateRelay.CountEvents, privateDB.CountEvents)
 	privateRelay.ReplaceEvent = append(privateRelay.ReplaceEvent, privateDB.ReplaceEvent)
 
@@ -213,6 +215,7 @@ func initRelays(ctx context.Context) {
 		MustNotBeBlacklistedToPost,
 		MustBeInWotToPost,
 		EventMustBeChatRelated,
+		MustNotBeDeleted(chatDB),
 	)
 
 	chatRelay.RejectConnection = append(chatRelay.RejectConnection,
@@ -228,6 +231,7 @@ func initRelays(ctx context.Context) {
 	chatRelay.StoreEvent = append(chatRelay.StoreEvent, chatDB.SaveEvent)
 	chatRelay.QueryEvents = append(chatRelay.QueryEvents, chatDB.QueryEvents)
 	chatRelay.DeleteEvent = append(chatRelay.DeleteEvent, chatDB.DeleteEvent)
+	chatRelay.OverwriteDeletionOutcome = append(chatRelay.OverwriteDeletionOutcome, OwnerCanDeleteAnyEvent)
 	chatRelay.CountEvents = append(chatRelay.CountEvents, chatDB.CountEvents)
 	chatRelay.ReplaceEvent = append(chatRelay.ReplaceEvent, chatDB.ReplaceEvent)
 
@@ -275,6 +279,7 @@ func initRelays(ctx context.Context) {
 			outboxRelayLimits.EventIPLimiterMaxTokens,
 		),
 		MustBeWhitelistedToPost,
+		MustNotBeDeleted(outboxDB),
 	)
 
 	outboxRelay.RejectConnection = append(outboxRelay.RejectConnection,
@@ -291,6 +296,7 @@ func initRelays(ctx context.Context) {
 	})
 	outboxRelay.QueryEvents = append(outboxRelay.QueryEvents, outboxDB.QueryEvents)
 	outboxRelay.DeleteEvent = append(outboxRelay.DeleteEvent, outboxDB.DeleteEvent)
+	outboxRelay.OverwriteDeletionOutcome = append(outboxRelay.OverwriteDeletionOutcome, OwnerCanDeleteAnyEvent)
 	outboxRelay.CountEvents = append(outboxRelay.CountEvents, outboxDB.CountEvents)
 	outboxRelay.ReplaceEvent = append(outboxRelay.ReplaceEvent, outboxDB.ReplaceEvent)
 
@@ -372,6 +378,7 @@ func initRelays(ctx context.Context) {
 		MustNotBeBlacklistedToPost,
 		MustBeInWotToPost,
 		MustTagWhitelistedPubKey,
+		MustNotBeDeleted(inboxDB),
 	)
 
 	inboxRelay.RejectConnection = append(inboxRelay.RejectConnection,
@@ -385,6 +392,7 @@ func initRelays(ctx context.Context) {
 	inboxRelay.StoreEvent = append(inboxRelay.StoreEvent, inboxDB.SaveEvent)
 	inboxRelay.QueryEvents = append(inboxRelay.QueryEvents, inboxDB.QueryEvents)
 	inboxRelay.DeleteEvent = append(inboxRelay.DeleteEvent, inboxDB.DeleteEvent)
+	inboxRelay.OverwriteDeletionOutcome = append(inboxRelay.OverwriteDeletionOutcome, OwnerCanDeleteAnyEvent)
 	inboxRelay.CountEvents = append(inboxRelay.CountEvents, inboxDB.CountEvents)
 	inboxRelay.ReplaceEvent = append(inboxRelay.ReplaceEvent, inboxDB.ReplaceEvent)
 

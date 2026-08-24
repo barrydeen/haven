@@ -108,6 +108,10 @@ func importOwnerNotes(ctx context.Context) {
 					slog.Debug("🚫 skipping event from blacklisted pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 					continue
 				}
+				if isDeleted(ctx, outboxDB, ev.Event) {
+					slog.Debug("🚫 skipping deleted event", "id", ev.ID)
+					continue
+				}
 				if err := wdb.Publish(ctx, *ev.Event); err != nil {
 					log.Println("🚫  error importing note", ev.ID, ":", err)
 					nFailedImportNotes++
@@ -183,8 +187,14 @@ func importTaggedNotes(ctx context.Context) {
 				}
 				if _, ok := config.WhitelistedPubKeys[tag[1]]; ok {
 					dbToWrite := wdbInbox
+					dbToCheck := inboxDB
 					if ev.Kind == nostr.KindGiftWrap {
 						dbToWrite = wdbChat
+						dbToCheck = chatDB
+					}
+					if isDeleted(ctx, dbToCheck, ev.Event) {
+						slog.Debug("🚫 skipping deleted tagged event", "id", ev.ID)
+						break
 					}
 					if err := dbToWrite.Publish(ctx, *ev.Event); err != nil {
 						log.Println("🚫 error importing tagged note", ev.ID, ":", err)
@@ -233,8 +243,10 @@ func subscribeInboxAndChat(ctx context.Context) {
 			}
 			if _, ok := config.WhitelistedPubKeys[tag[1]]; ok {
 				dbToPublish := wdbInbox
+				dbToCheck := inboxDB
 				if ev.Kind == nostr.KindGiftWrap {
 					dbToPublish = wdbChat
+					dbToCheck = chatDB
 				}
 
 				slog.Debug("ℹ️ importing event", "kind", ev.Kind, "id", ev.ID, "relay", ev.Relay.URL)
@@ -242,6 +254,11 @@ func subscribeInboxAndChat(ctx context.Context) {
 				if isDuplicate(ctx, dbToPublish, ev.Event) {
 					slog.Debug("ℹ️ skipping duplicate event", "id", ev.ID)
 					break // Avoid re-importing duplicates
+				}
+
+				if isDeleted(ctx, dbToCheck, ev.Event) {
+					slog.Debug("🚫 skipping deleted event", "id", ev.ID)
+					break // Deleted events must not come back
 				}
 
 				if err := dbToPublish.Publish(ctx, *ev.Event); err != nil {
