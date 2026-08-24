@@ -122,6 +122,8 @@ func initDBs() {
 func initRelays(ctx context.Context) {
 	initDBs()
 
+	loadBanList(ctx)
+
 	initRelayLimits()
 
 	privateRelay.Info.Name = config.PrivateRelayName
@@ -141,6 +143,7 @@ func initRelays(ctx context.Context) {
 	privateRelay.RejectFilter = append(privateRelay.RejectFilter, policies.MustAuth, MustBeWhitelistedToQuery)
 
 	privateRelay.RejectEvent = append(privateRelay.RejectEvent,
+		MustNotBeBannedToPost,
 		policies.RejectEventsWithBase64Media,
 		policies.EventIPRateLimiter(
 			privateRelayLimits.EventIPLimiterTokensPerInterval,
@@ -206,6 +209,7 @@ func initRelays(ctx context.Context) {
 	chatRelay.RejectFilter = append(chatRelay.RejectFilter, policies.MustAuth, MustBeInWotToQuery)
 
 	chatRelay.RejectEvent = append(chatRelay.RejectEvent,
+		MustNotBeBannedToPost,
 		policies.RejectEventsWithBase64Media,
 		policies.EventIPRateLimiter(
 			chatRelayLimits.EventIPLimiterTokensPerInterval,
@@ -272,6 +276,7 @@ func initRelays(ctx context.Context) {
 	}
 
 	outboxRelay.RejectEvent = append(outboxRelay.RejectEvent,
+		MustNotBeBannedToPost,
 		policies.RejectEventsWithBase64Media,
 		policies.EventIPRateLimiter(
 			outboxRelayLimits.EventIPLimiterTokensPerInterval,
@@ -299,6 +304,7 @@ func initRelays(ctx context.Context) {
 	outboxRelay.OverwriteDeletionOutcome = append(outboxRelay.OverwriteDeletionOutcome, OwnerCanDeleteAnyEvent)
 	outboxRelay.CountEvents = append(outboxRelay.CountEvents, outboxDB.CountEvents)
 	outboxRelay.ReplaceEvent = append(outboxRelay.ReplaceEvent, outboxDB.ReplaceEvent)
+	outboxRelay.OnEventSaved = append(outboxRelay.OnEventSaved, refreshBanList)
 
 	mux = outboxRelay.Router()
 
@@ -368,6 +374,7 @@ func initRelays(ctx context.Context) {
 	}
 
 	inboxRelay.RejectEvent = append(inboxRelay.RejectEvent,
+		MustNotBeBannedToPost,
 		policies.RejectEventsWithBase64Media,
 		policies.EventIPRateLimiter(
 			inboxRelayLimits.EventIPLimiterTokensPerInterval,

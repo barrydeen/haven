@@ -42,8 +42,8 @@ relay, but anyone can view the images and videos.
 **Web of Trust**: Protected from DM and Inbox spam by using a Web of Trust (WoT). See the [Web of Trust 
 Documentation](docs/wot.md) for more details.
 
-**Access Control**: Whitelist and blacklist npubs. See the [Access Control Documentation](docs/access-control.md) 
-for more details.
+**Access Control**: Whitelist and blacklist npubs, ban them from a nostr list you publish, and delete any event from 
+your relay. See the [Access Control Documentation](docs/access-control.md) for more details.
 
 **Inbox Relay**: Notes are pulled from other relays and stored in the inbox relay.
 

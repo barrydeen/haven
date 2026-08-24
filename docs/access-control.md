@@ -60,6 +60,52 @@ otherwise be allowed by the Web of Trust.
    BLACKLISTED_NPUBS_FILE=blacklisted_npubs.json
    ```
 
+## Banning Users
+
+Banning stops a pubkey from writing anything to your relay. Unlike the blacklist, the ban list lives on nostr: it is a
+[NIP-51](https://github.com/nostr-protocol/nips/blob/master/51.md) style replaceable list of kind `10084` that the
+owner publishes to their own relay, so it can be edited from a client without touching a file or restarting Haven.
+
+Every `p` tag on the list is a banned pubkey:
+
+```json
+{
+  "kind": 10084,
+  "tags": [
+    ["p", "<pubkey to ban>"],
+    ["p", "<another pubkey to ban>"]
+  ],
+  "content": ""
+}
+```
+
+Publish it to your outbox relay, for example:
+
+```sh
+nak event -k 10084 -t p=<pubkey> -t p=<other-pubkey> --sec <owner-nsec> wss://your.relay
+```
+
+Haven reads the latest version of the list from the outbox relay on startup and updates its cache the moment you
+publish a new one, so adding or removing a pubkey takes effect immediately. Because the list is replaceable, each
+version replaces the last: publish the full list every time, not just the pubkey you are adding.
+
+### Effects of Banning:
+- **Every relay**: The private, chat, outbox and inbox relays all reject events from a banned pubkey, including
+  delete requests.
+- **Import**: Events from banned pubkeys are skipped when importing from external relays, in both `./haven import`
+  and the live subscription.
+- **Precedence**: A ban wins over whitelisting. The owner is always skipped when the list is read, so you cannot lock
+  yourself out.
+
+> [!NOTE]
+> Only the owner's list counts — a kind `10084` from anybody else is stored like any other event and ignored. Private
+> (NIP-44 encrypted) list entries are not supported, since the relay has no key to decrypt them with.
+
+> [!IMPORTANT]
+> Banning stops writes, not reads, and gift wrapped messages are signed with throwaway keys, so a ban only stops those
+> when the sender is authenticated. Events a banned user published before the ban stay in your database; delete them
+> with a delete request (see below).
+
 ## Deleting Events
 
 The relay owner (`OWNER_NPUB`) can delete **any** event stored on their relay by publishing a
