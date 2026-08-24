@@ -59,6 +59,20 @@ func MustBeInWotToPost(ctx context.Context, event *nostr.Event) (bool, string) {
 	return false, ""
 }
 
+func MustNotBeBannedToPost(ctx context.Context, event *nostr.Event) (bool, string) {
+	if bannedPubKeys.has(event.PubKey) {
+		slog.Debug("🚫 event rejected: event author is banned", "event", event.ID, "pubkey", event.PubKey)
+		return true, "you are banned from this relay"
+	}
+	// gift wraps and the like are signed with throwaway keys, so check who is on
+	// the other end of the connection too, when we know
+	if authenticatedUser := khatru.GetAuthed(ctx); authenticatedUser != "" && bannedPubKeys.has(authenticatedUser) {
+		slog.Debug("🚫 event rejected: authenticated user is banned", "event", event.ID, "pubkey", authenticatedUser)
+		return true, "you are banned from this relay"
+	}
+	return false, ""
+}
+
 func MustNotBeBlacklistedToPost(ctx context.Context, event *nostr.Event) (bool, string) {
 	// Events from a blacklisted pubkey ARE always rejected
 	if _, ok := config.BlacklistedPubKeys[event.PubKey]; ok {
@@ -93,6 +107,13 @@ func isOwnerDeleteRequest(event *nostr.Event) bool {
 // lets authors delete their own events, so that the owner can delete anything
 // stored on their relay. Everybody else is still limited to their own events.
 func OwnerCanDeleteAnyEvent(_ context.Context, target *nostr.Event, deletion *nostr.Event) (bool, string) {
+	// khatru handles delete requests before any reject policy runs, so this is
+	// where a banned pubkey is stopped from deleting anything
+	if bannedPubKeys.has(deletion.PubKey) {
+		slog.Debug("🚫 deletion rejected: user is banned", "event", target.ID, "pubkey", deletion.PubKey)
+		return false, "you are banned from this relay"
+	}
+
 	if target.PubKey == deletion.PubKey {
 		return true, ""
 	}

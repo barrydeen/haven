@@ -54,6 +54,7 @@ func runImport(ctx context.Context) {
 	}
 
 	initDBs()
+	loadBanList(ctx)
 	wotModel := wot.NewSimpleInMemory(
 		pool,
 		config.WhitelistedPubKeys,
@@ -106,6 +107,10 @@ func importOwnerNotes(ctx context.Context) {
 				}
 				if _, ok := config.BlacklistedPubKeys[ev.PubKey]; ok {
 					slog.Debug("🚫 skipping event from blacklisted pubkey", "pubkey", ev.PubKey, "id", ev.ID)
+					continue
+				}
+				if bannedPubKeys.has(ev.PubKey) {
+					slog.Debug("🚫 skipping event from banned pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 					continue
 				}
 				if isDeleted(ctx, outboxDB, ev.Event) {
@@ -178,6 +183,11 @@ func importTaggedNotes(ctx context.Context) {
 				continue
 			}
 
+			if bannedPubKeys.has(ev.PubKey) {
+				slog.Debug("🚫 skipping tagged event from banned pubkey", "pubkey", ev.PubKey, "id", ev.ID)
+				continue
+			}
+
 			if !wot.GetInstance().Has(ctx, ev.PubKey) && ev.Kind != nostr.KindGiftWrap {
 				continue
 			}
@@ -232,6 +242,10 @@ func subscribeInboxAndChat(ctx context.Context) {
 	for ev := range pool.SubscribeMany(ctx, config.ImportSeedRelays, filter) {
 		if _, ok := config.BlacklistedPubKeys[ev.PubKey]; ok {
 			slog.Debug("🚫discarding imported note from blacklisted pubkey", "pubkey", ev.PubKey, "id", ev.ID)
+			continue
+		}
+		if bannedPubKeys.has(ev.PubKey) {
+			slog.Debug("🚫 discarding imported note from banned pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 			continue
 		}
 		if !wot.GetInstance().Has(ctx, ev.PubKey) && ev.Kind != nostr.KindGiftWrap {
