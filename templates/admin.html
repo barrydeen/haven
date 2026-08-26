@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta name="theme-color" content="#111827" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="icon" type="image/png" href="/static/favicon-96x96.png" sizes="96x96" />
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+    <link rel="shortcut icon" href="/static/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
+    <title>Relay management — {{.RelayHost}}</title>
+    <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap");
+
+      /*
+        Everything below keeps the page usable when the Tailwind CDN is
+        unreachable, which is the normal case for a Tor-only relay. Unstyled but
+        legible is fine; unstyled and ambiguous about whether an action hits one
+        relay or all four is not, so the scope cues are repeated here.
+      */
+      [hidden] { display: none !important; }
+      body {
+        font-family: "Inter", system-ui, sans-serif;
+        background: #111827;
+        color: #f9fafb;
+        margin: 0;
+        line-height: 1.5;
+      }
+      main { max-width: 78rem; margin: 0 auto; padding: 1rem; }
+      h1, h2, h3 { line-height: 1.2; }
+      a { color: #c4b5fd; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid #374151; vertical-align: top; }
+      input, button, select { font: inherit; }
+      input[type="text"], input[type="url"], input[type="number"] {
+        background: #1f2937; color: #f9fafb; border: 1px solid #4b5563;
+        border-radius: 0.25rem; padding: 0.35rem 0.5rem;
+      }
+      button { cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      fieldset { border: 1px solid #374151; border-radius: 0.5rem; }
+      .scope-global { border-left: 4px solid #d97706; }
+      .scope-relay { border-left: 4px solid #7e22ce; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      dialog {
+        background: #1f2937; color: #f9fafb;
+        border: 1px solid #4b5563; border-radius: 0.5rem; max-width: 32rem;
+      }
+      dialog::backdrop { background: rgba(0, 0, 0, 0.7); }
+
+      /* Selection was signalled only by Tailwind classes, so with the CDN down
+         there was no way to tell which relay or which filter was active — the
+         exact ambiguity this block exists to prevent. */
+      .relay-tab[aria-selected="true"] { outline: 2px solid #7e22ce; outline-offset: -2px; }
+      .view-tab[aria-selected="true"] { background: #111827; color: #f9fafb; box-shadow: inset 0 -2px 0 currentColor; }
+      .media-chip[aria-pressed="true"],
+      .density-btn[aria-pressed="true"],
+      #media-select-mode[aria-pressed="true"] { background: #78350f; color: #fde68a; }
+
+      .media-grid {
+        display: grid; gap: 0.75rem; list-style: none; padding: 0; margin: 0;
+        grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+      }
+      .media-grid.is-compact { grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr)); gap: 0.5rem; }
+      .media-tile {
+        position: relative; display: block; width: 100%; aspect-ratio: 1 / 1;
+        overflow: hidden; border: 1px solid #374151; border-radius: 0.5rem;
+        background: #1f2937; padding: 0; text-align: left;
+        /* no Tailwind 3.4 utility for either, and together they are the single
+           biggest scroll win on a library of thousands of tiles */
+        content-visibility: auto;
+        contain-intrinsic-size: 10rem 10rem;
+      }
+      .media-tile:focus-visible { outline: 2px solid #fbbf24; outline-offset: 2px; }
+      .media-tile[data-state="blocked"],
+      .media-tile[data-state="missing"] { border-style: dashed; }
+      .media-tile[data-state="blocked"] { border-color: #d97706; }
+      .media-thumb { opacity: 0; transition: opacity 0.2s; }
+      .media-thumb.is-loaded { opacity: 1; }
+      /* The checkbox is a selection affordance and nothing else, so it stays out
+         of the way until there is a selection to make. Both rules are written
+         through a parent because the element also carries Tailwind's .grid
+         utility, and the CDN's stylesheet is injected after this block — a bare
+         .media-check would lose the tie on source order. */
+      .media-tile .media-check { display: none; }
+      .media-grid.is-selecting .media-tile .media-check { display: grid; }
+
+      .composition-bar { display: flex; height: 0.375rem; overflow: hidden; background: #111827; }
+      .composition-bar > span { display: block; height: 100%; }
+
+      .selection-bar { position: sticky; bottom: 0; background: #111827; border-top: 2px solid #d97706; }
+
+      /* the shared dialog rule caps width at 32rem, which would crush this into
+         a stub; #confirm-dialog still wants that cap, so override rather than
+         weaken it */
+      #media-dialog.media-drawer,
+      #note-dialog.side-drawer {
+        margin: 0 0 0 auto; height: 100%; max-height: 100%;
+        width: min(38rem, 100%); max-width: 38rem;
+        border-radius: 0; border-left: 1px solid #4b5563; padding: 0;
+      }
+      @media (max-width: 42rem) {
+        #media-dialog.media-drawer,
+        #note-dialog.side-drawer { width: 100%; max-width: 100%; border-left: 0; }
+      }
+
+      .media-skeleton { background: #1f2937; border-radius: 0.5rem; aspect-ratio: 1 / 1; }
+      @media (prefers-reduced-motion: reduce) { .animate-pulse { animation: none; } }
+
+      /* Notes and Dashboard.
+         Same two rules as everything above: what keeps the page unambiguous with
+         no Tailwind at all, and what Tailwind 3.4 has no utility for. */
+      .range-btn[aria-pressed="true"],
+      #notes-select-mode[aria-pressed="true"],
+      .note-chip[aria-pressed="true"] { background: #4c1d95; color: #ddd6fe; }
+
+      /* the selection bar is one component in two scopes, and its top border is
+         the scope cue: amber for the global media library, purple for one
+         relay's notes */
+      .selection-bar-relay { border-top-color: #7e22ce; }
+
+      .notes-feed { display: grid; gap: 0.75rem; list-style: none; padding: 0; margin: 0; }
+      .notes-feed.is-cards { grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr)); }
+      .note-card {
+        position: relative; border: 1px solid #374151; border-left-width: 3px;
+        border-radius: 0.5rem; background: #1f2937; padding: 0.75rem 0.9rem;
+        /* the same reasoning as .media-tile: no Tailwind utility for either, and
+           together they are what makes a feed of thousands scroll */
+        content-visibility: auto;
+        contain-intrinsic-size: 14rem 22rem;
+      }
+      .notes-feed.is-compact .note-card { contain-intrinsic-size: 4rem 22rem; }
+      .note-card:focus-visible { outline: 2px solid #fbbf24; outline-offset: 2px; }
+      .note-card[data-selected="true"] { box-shadow: inset 0 0 0 2px #a78bfa; }
+      .note-content { white-space: pre-wrap; overflow-wrap: anywhere; }
+      .notes-feed.is-cards .note-content {
+        display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden;
+      }
+      .notes-feed.is-compact .note-content { -webkit-line-clamp: 2; }
+      .note-card .note-check { display: none; }
+      .notes-feed.is-selecting .note-card .note-check { display: grid; }
+      .note-remote {
+        display: inline-flex; align-items: center; gap: 0.4rem;
+        border: 1px dashed #4b5563; border-radius: 0.25rem; padding: 0.35rem 0.6rem;
+        font-size: 0.75rem; color: #9ca3af; background: transparent; cursor: pointer;
+      }
+      .note-locked { border: 1px dashed #d97706; border-radius: 0.375rem; padding: 0.75rem; color: #fcd34d; }
+      .note-media { max-height: 22rem; max-width: 100%; border-radius: 0.375rem; }
+
+      /* Charts. Everything inside an <svg> is a presentation attribute, so a chart
+         draws correctly with no Tailwind at all — only the card around it needs
+         these, and the grid falls back to wrapping columns because
+         grid-template-columns comes from the CDN and nothing else. */
+      .chart-grid { display: flex; flex-wrap: wrap; gap: 1rem; }
+      .chart-grid > * { flex: 1 1 20rem; min-width: 0; }
+      /* the KPI row wants five across on a wide screen, so its tiles take a
+         narrower basis than a chart card does */
+      #dash-kpis > * { flex: 1 1 11rem; }
+      .chart-card { border: 1px solid #374151; border-radius: 0.5rem; padding: 0.75rem; background: #111827; }
+      .chart-svg { display: block; width: 100%; height: auto; }
+      .chart-plot:focus-visible { outline: 2px solid #fbbf24; outline-offset: 2px; }
+      .chart-legend { display: flex; flex-wrap: wrap; gap: 0.75rem; font-size: 0.75rem; color: #d1d5db; }
+      .chart-table td, .chart-table th, .stat-sub { font-variant-numeric: tabular-nums; }
+      .stat-tile { border: 1px solid #374151; border-radius: 0.5rem; padding: 0.75rem 1rem; background: #111827; }
+      /* proportional figures on purpose: tabular-nums makes a large standalone
+         number look loose */
+      .stat-value { font-size: 1.75rem; font-weight: 600; line-height: 1.1; font-variant-numeric: proportional-nums; }
+      .stat-hero { font-size: 2.75rem; }
+      .chart-tip {
+        position: absolute; z-index: 40; pointer-events: none;
+        background: #1f2937; border: 1px solid #4b5563; border-radius: 0.25rem;
+        padding: 0.4rem 0.6rem; font-size: 0.75rem; color: #f9fafb;
+        opacity: 0; transition: opacity 0.15s;
+      }
+      .chart-tip.is-open { opacity: 1; }
+      @media (prefers-reduced-motion: reduce) { .chart-tip { transition: none; } }
+
+      .sr-only {
+        position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+        overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+      }
+    </style>
+  </head>
+
+  <body
+    class="bg-gray-900 text-white"
+    data-owner-pubkey="{{.OwnerPubKey}}"
+    data-owner-npub="{{.OwnerNpub}}"
+    data-relay-host="{{.RelayHost}}"
+    data-relay-version="{{.RelayVersion}}"
+  >
+    <main>
+      <header class="border-b border-gray-800 pb-4 mb-6">
+        <div class="flex flex-wrap items-baseline justify-between gap-2">
+          <h1 class="text-2xl font-bold text-purple-400">
+            HAVEN relay management
+          </h1>
+          <p class="mono text-sm text-gray-400">
+            {{.RelayHost}} · {{.RelayVersion}}
+          </p>
+        </div>
+
+        <div id="identity" class="mt-3 flex flex-wrap items-center gap-3 text-sm" hidden>
+          <span class="text-gray-400">signed in as</span>
+          <span id="identity-npub" class="mono text-purple-300"></span>
+          <span id="identity-badge" class="rounded bg-purple-900 px-2 py-0.5 text-xs text-purple-200"></span>
+          <button id="copy-identity" type="button" class="text-gray-400 underline">copy npub</button>
+        </div>
+      </header>
+
+      <!-- banners -->
+      <div id="banners" class="space-y-3 mb-6"></div>
+
+      <!-- disconnected -->
+      <section id="connect-card" class="mx-auto max-w-xl rounded-lg border border-gray-700 p-6 text-center">
+        <h2 class="text-lg font-semibold mb-3">Relay management</h2>
+        <p class="text-gray-300 mb-1">This relay is administered by</p>
+        <p class="mono text-purple-300 break-all mb-4">{{.OwnerNpub}}</p>
+        <p class="text-gray-400 text-sm mb-5">
+          Connect the signer holding that key to manage the relay.
+        </p>
+        <button
+          id="connect"
+          type="button"
+          class="rounded bg-purple-700 px-5 py-2 font-semibold text-white hover:bg-purple-600"
+        >
+          Connect signer
+        </button>
+        <p class="mt-5 text-xs text-gray-500">
+          Your key never leaves your signer. Every action is signed on its own,
+          so your extension may ask you to approve each one — if it offers an
+          "always allow for this site" option, this is a good place for it.
+        </p>
+      </section>
+
+      <!-- connected -->
+      <div id="console" hidden>
+        <nav class="mb-6 border-b border-gray-800 pb-3" aria-label="Console sections">
+          <div id="view-tabs" class="inline-flex gap-1 rounded-lg border border-gray-700 bg-gray-800/60 p-1" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              id="view-tab-dashboard"
+              data-view="dashboard"
+              aria-controls="view-dashboard"
+              aria-selected="true"
+              tabindex="0"
+              class="view-tab rounded px-3 py-1.5 text-sm font-semibold text-gray-400"
+            >
+              Dashboard
+              <span class="ml-1 rounded bg-gray-700 px-1.5 py-0.5 text-[10px] text-gray-300">READ ONLY</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="view-tab-notes"
+              data-view="notes"
+              aria-controls="view-notes"
+              aria-selected="false"
+              tabindex="-1"
+              class="view-tab rounded px-3 py-1.5 text-sm font-semibold text-gray-400"
+            >
+              Notes
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="view-tab-moderation"
+              data-view="moderation"
+              aria-controls="view-moderation"
+              aria-selected="false"
+              tabindex="-1"
+              class="view-tab rounded px-3 py-1.5 text-sm font-semibold text-gray-400"
+            >
+              Moderation
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="view-tab-media"
+              data-view="media"
+              aria-controls="view-media"
+              aria-selected="false"
+              tabindex="-1"
+              class="view-tab rounded px-3 py-1.5 text-sm font-semibold text-gray-400"
+            >
+              Media
+              <span class="ml-1 rounded bg-amber-900 px-1.5 py-0.5 text-[10px] text-amber-200">GLOBAL</span>
+            </button>
+          </div>
+        </nav>
+
+        <!-- The relay switcher is shared by the views that are scoped to one
+             relay, and hidden by the ones that are not: blossom is served by the
+             outbox relay alone and the dashboard reports on all four, so in
+             either of those a relay selector would be a control that does
+             nothing, and a greyed one still invites the click.
+
+             It lives here, outside every tabpanel, because admin.js builds its
+             RELAYS list from .relay-tab nodes — a second copy inside another view
+             would give the page eight relays and two candidates for GLOBAL. -->
+        <div id="relay-switcher" hidden>
+        <nav class="mb-6 rounded-lg border border-gray-700 p-3">
+          <p class="mb-2 text-xs uppercase tracking-wide text-gray-500">
+            Selected relay
+          </p>
+          <div id="relay-tabs" class="flex flex-wrap gap-2" role="tablist">
+            {{range .Relays}}
+            <button
+              type="button"
+              role="tab"
+              class="relay-tab rounded border border-gray-700 px-3 py-1.5 text-sm text-gray-300 hover:text-purple-300"
+              data-key="{{.Key}}"
+              data-label="{{.Label}}"
+              data-path="{{.Path}}"
+              data-service-url="{{.ServiceURL}}"
+            >
+              {{.Label}}
+              <span class="mono text-xs text-gray-500">{{.Path}}</span>
+            </button>
+            {{end}}
+          </div>
+          <p class="mt-2 text-xs text-gray-500">
+            signing <span class="mono" id="selected-service-url"></span>
+          </p>
+        </nav>
+        </div>
+
+        <!-- Dashboard: read only, all four relays. No scope spine, because the
+             purple/amber rail is a blast radius warning for writes and this view
+             performs none — the absence of it is itself the cue. -->
+        <div id="view-dashboard" role="tabpanel" aria-labelledby="view-tab-dashboard" tabindex="-1">
+          <section class="rounded-lg border border-gray-700 p-4" data-panel="dashboard">
+            <div class="panel-head mb-4 flex flex-wrap items-baseline justify-between gap-3">
+              <div>
+                <h3 class="font-semibold">
+                  Dashboard
+                  <span class="ml-1 rounded bg-gray-700 px-1.5 py-0.5 text-xs text-gray-300">READ ONLY</span>
+                </h3>
+                <p class="endpoint mono text-xs text-gray-500"></p>
+                <p class="text-xs text-gray-500">
+                  All four relays. One signature brings back the live counters and the
+                  24&#8209;hour, 7&#8209;day and 30&#8209;day history together, so switching
+                  between them afterwards is free.
+                </p>
+              </div>
+              <button data-action="load" type="button" class="rounded bg-purple-700 px-4 py-1.5 text-sm font-semibold hover:bg-purple-600">
+                Load dashboard
+              </button>
+            </div>
+
+            <div class="panel-body" hidden>
+              <div class="mb-5 flex flex-wrap items-center gap-x-4 gap-y-2">
+                <div id="dash-range" class="flex rounded border border-gray-600" role="group" aria-label="Time range">
+                  <button type="button" data-range="24h" aria-pressed="true" class="range-btn px-3 py-1 text-xs">24h</button>
+                  <button type="button" data-range="7d" aria-pressed="false" class="range-btn border-l border-gray-600 px-3 py-1 text-xs">7d</button>
+                  <button type="button" data-range="30d" aria-pressed="false" class="range-btn border-l border-gray-600 px-3 py-1 text-xs">30d</button>
+                </div>
+                <p id="dash-freshness" class="text-xs text-gray-500"></p>
+                <button id="dash-reload" type="button" class="rounded border border-gray-600 px-3 py-1 text-xs">
+                  Reload &#183; one signature
+                </button>
+              </div>
+
+              <p id="dash-coverage" class="mb-4 rounded border border-amber-600 bg-amber-950/40 px-3 py-2 text-sm text-amber-200" hidden></p>
+
+              <div id="dash-kpis" class="chart-grid mb-6"></div>
+              <div id="dash-charts" class="chart-grid"></div>
+            </div>
+
+            <p class="status text-sm mt-3" aria-live="polite"></p>
+          </section>
+        </div>
+
+        <!-- Notes: read, and delete, on the relay selected above. Purple spine
+             because a delete here is a per-relay write, which is exactly what
+             that cue is for. -->
+        <div id="view-notes" role="tabpanel" aria-labelledby="view-tab-notes" tabindex="-1" hidden>
+          <section class="scope-relay rounded-lg border border-purple-700/50 p-4" data-panel="notes">
+            <div class="panel-head mb-4 flex flex-wrap items-baseline justify-between gap-3">
+              <div>
+                <h3 class="font-semibold">Notes on <span id="notes-relay-label">this relay</span></h3>
+                <p class="endpoint mono text-xs text-gray-500"></p>
+                <p class="text-xs text-gray-500">
+                  Read only, apart from deleting. Every page of the feed is one signature;
+                  filtering and searching what is already loaded costs nothing.
+                </p>
+              </div>
+              <button data-action="load" type="button" class="rounded bg-purple-700 px-4 py-1.5 text-sm font-semibold hover:bg-purple-600">
+                Load notes
+              </button>
+            </div>
+
+            <div class="panel-body" hidden>
+              <div class="mb-4 overflow-hidden rounded-lg border border-gray-700 bg-gray-800/60">
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+                  <div id="notes-kind-filters" class="flex flex-wrap gap-1" role="group" aria-label="Filter loaded notes by kind"></div>
+                  <label class="sr-only" for="notes-search">Filter the loaded notes</label>
+                  <input id="notes-search" type="text" inputmode="search" autocomplete="off" spellcheck="false"
+                         placeholder="filter the loaded notes&#8230;" class="min-w-0 flex-1 basis-48" />
+                  <label class="text-xs text-gray-500">sort
+                    <select id="notes-sort" class="ml-1 rounded border border-gray-600 bg-gray-800 px-2 py-1 text-sm text-gray-200">
+                      <option value="newest">newest first</option>
+                      <option value="oldest">oldest first (loaded only)</option>
+                      <option value="kind">by kind (loaded only)</option>
+                      <option value="size">by size (loaded only)</option>
+                    </select>
+                  </label>
+                  <div id="notes-density" class="flex rounded border border-gray-600" role="group" aria-label="View density">
+                    <button type="button" data-density="cards" aria-pressed="true" class="density-btn px-2 py-1 text-xs">Cards</button>
+                    <button type="button" data-density="compact" aria-pressed="false" class="density-btn border-l border-gray-600 px-2 py-1 text-xs">Compact</button>
+                    <button type="button" data-density="table" aria-pressed="false" class="density-btn border-l border-gray-600 px-2 py-1 text-xs">Table</button>
+                  </div>
+                  <button id="notes-select-mode" type="button" aria-pressed="false" class="rounded border border-gray-600 px-3 py-1 text-sm">Select</button>
+                  <label class="flex items-center gap-1.5 text-xs text-gray-400" title="Fetching an image from another host tells that host your IP address and when you looked. On a Tor-only relay that is the one thing this page can leak.">
+                    <input id="notes-remote-media" type="checkbox" />
+                    load remote media
+                  </label>
+                </div>
+
+                <div class="border-t border-gray-700/60 px-4 py-3">
+                  <p class="mb-2 text-xs uppercase tracking-wide text-gray-500">Ask the relay &#183; one signature each</p>
+                  <div class="flex flex-wrap items-end gap-2">
+                    <label class="text-xs text-gray-500">kind
+                      <input id="notes-q-kind" type="number" min="0" max="65535" class="ml-1 w-24" /></label>
+                    <label class="text-xs text-gray-500">author
+                      <input id="notes-q-author" type="text" placeholder="npub or hex" autocomplete="off" spellcheck="false" class="ml-1 w-52" /></label>
+                    <label class="text-xs text-gray-500">from
+                      <input id="notes-q-since" type="date" class="ml-1" /></label>
+                    <label class="text-xs text-gray-500">to
+                      <input id="notes-q-until" type="date" class="ml-1" /></label>
+                    <label class="text-xs text-gray-500">contains
+                      <input id="notes-q-search" type="text" autocomplete="off" spellcheck="false" class="ml-1 w-52" /></label>
+                    <button id="notes-query" type="button" class="rounded bg-purple-700 px-3 py-1.5 text-sm font-semibold hover:bg-purple-600">
+                      Search this relay &#183; one signature
+                    </button>
+                    <button id="notes-query-clear" type="button" class="rounded border border-gray-600 px-3 py-1.5 text-sm">Clear</button>
+                  </div>
+                </div>
+              </div>
+
+              <p id="notes-summary" class="mb-3 text-xs text-gray-500" aria-live="polite"></p>
+              <p id="notes-stale" class="mb-3 rounded border border-purple-600 bg-purple-950/30 px-3 py-2 text-sm text-purple-200" hidden></p>
+
+              <ul id="notes-feed" class="notes-feed is-cards" aria-label="Stored events"></ul>
+
+              <div id="notes-table-wrap" hidden>
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col" class="text-xs uppercase tracking-wide text-gray-500">Kind</th>
+                      <th scope="col" class="text-xs uppercase tracking-wide text-gray-500">Author</th>
+                      <th scope="col" class="text-xs uppercase tracking-wide text-gray-500">Created</th>
+                      <th scope="col" class="text-xs uppercase tracking-wide text-gray-500">Content</th>
+                      <th scope="col"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="notes-rows"></tbody>
+                </table>
+              </div>
+
+              <p id="notes-empty" class="rounded-lg border border-dashed border-gray-700 px-6 py-10 text-center text-sm text-gray-400" hidden></p>
+
+              <div class="mt-4 flex flex-col items-center gap-2">
+                <button id="notes-show-more" type="button" class="rounded border border-gray-600 px-4 py-1.5 text-sm" hidden></button>
+                <button id="notes-load-more" type="button" class="rounded bg-purple-700 px-4 py-1.5 text-sm font-semibold hover:bg-purple-600" hidden></button>
+              </div>
+
+              <div id="notes-selection" class="selection-bar selection-bar-relay z-30 -mx-4 mt-4 flex flex-wrap items-center gap-3 px-4 py-3"
+                   role="region" aria-label="Selection" hidden>
+                <p class="text-sm"><span id="notes-selection-count" class="font-semibold text-purple-300"></span></p>
+                <p id="notes-selection-hidden" class="text-xs text-purple-300/80" hidden></p>
+                <div class="ml-auto flex flex-wrap gap-2">
+                  <button id="notes-selection-all" type="button" class="rounded border border-gray-600 px-3 py-1.5 text-sm"></button>
+                  <button id="notes-selection-clear" type="button" class="rounded border border-gray-600 px-3 py-1.5 text-sm">Clear</button>
+                  <button id="notes-selection-delete" type="button" class="rounded bg-purple-700 px-3 py-1.5 text-sm font-semibold hover:bg-purple-600"></button>
+                </div>
+              </div>
+            </div>
+
+            <p class="status text-sm mt-3" aria-live="polite"></p>
+          </section>
+        </div>
+
+        <div id="view-moderation" role="tabpanel" aria-labelledby="view-tab-moderation" tabindex="-1" hidden>
+        <div class="grid gap-6 lg:grid-cols-2 items-start">
+          <!-- per-relay column -->
+          <div class="space-y-6">
+            <h2 class="scope-relay rounded bg-gray-800/60 px-3 py-2 text-sm font-semibold text-purple-300">
+              <span id="scope-relay-label">This relay</span> only
+            </h2>
+
+            <section class="scope-relay rounded-lg border border-purple-700/50 p-4" data-panel="info">
+              <div class="panel-head mb-3">
+                <h3 class="font-semibold">Relay information</h3>
+                <p class="endpoint mono text-xs text-gray-500"></p>
+                <p class="text-xs text-gray-500">read from this relay's NIP-11 document</p>
+              </div>
+              <div class="space-y-3">
+                <label class="block text-sm">
+                  <span class="text-gray-400">Name</span>
+                  <input id="info-name" type="text" class="mt-1 w-full" />
+                </label>
+                <label class="block text-sm">
+                  <span class="text-gray-400">Description</span>
+                  <input id="info-description" type="text" class="mt-1 w-full" />
+                </label>
+                <label class="block text-sm">
+                  <span class="text-gray-400">Icon URL</span>
+                  <input id="info-icon" type="url" class="mt-1 w-full" />
+                </label>
+                <div class="flex flex-wrap items-center gap-2">
+                  <button data-action="save-name" type="button" class="rounded bg-purple-700 px-3 py-1.5 text-sm hover:bg-purple-600">Save name</button>
+                  <button data-action="save-description" type="button" class="rounded bg-purple-700 px-3 py-1.5 text-sm hover:bg-purple-600">Save description</button>
+                  <button data-action="save-icon" type="button" class="rounded bg-purple-700 px-3 py-1.5 text-sm hover:bg-purple-600">Save icon</button>
+                </div>
+                <img id="info-icon-preview" alt="" referrerpolicy="no-referrer" loading="lazy" class="h-12 w-12 rounded" hidden />
+              </div>
+              <p class="status text-sm mt-3"></p>
+            </section>
+
+            <section class="scope-relay rounded-lg border border-purple-700/50 p-4" data-panel="kinds">
+              <div class="panel-head mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                <div>
+                  <h3 class="font-semibold">Kind rules</h3>
+                  <p class="endpoint mono text-xs text-gray-500"></p>
+                </div>
+                <button data-action="load" type="button" class="rounded border border-gray-600 px-3 py-1 text-sm">Load</button>
+              </div>
+              <div class="panel-body" hidden>
+                <p class="text-xs text-gray-500 mb-3">
+                  These rules only ever narrow what the relay already accepts.
+                  An empty allow list means no allow list.
+                </p>
+                <p class="text-sm text-gray-400">Allowed</p>
+                <div id="kinds-allowed" class="my-2 flex flex-wrap gap-2"></div>
+                <p class="text-sm text-gray-400">Disallowed</p>
+                <div id="kinds-disallowed" class="my-2 flex flex-wrap gap-2"></div>
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                  <input id="kind-input" type="number" min="0" max="65535" placeholder="kind" class="w-28" />
+                  <button data-action="allow-kind" type="button" class="rounded bg-purple-700 px-3 py-1.5 text-sm hover:bg-purple-600">Allow</button>
+                  <button data-action="disallow-kind" type="button" class="rounded bg-amber-700 px-3 py-1.5 text-sm hover:bg-amber-600">Disallow</button>
+                </div>
+              </div>
+              <p class="status text-sm mt-3"></p>
+            </section>
+
+            <section class="scope-relay rounded-lg border border-purple-700/50 p-4" data-panel="events">
+              <div class="panel-head mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                <div>
+                  <h3 class="font-semibold">Banned events</h3>
+                  <p class="endpoint mono text-xs text-gray-500"></p>
+                </div>
+                <button data-action="load" type="button" class="rounded border border-gray-600 px-3 py-1 text-sm">Load</button>
+              </div>
+              <div class="panel-body" hidden>
+                <p class="text-xs text-gray-500 mb-3">
+                  Banning an event deletes the stored copy and keeps it from
+                  being published again. Unbanning does not bring it back.
+                </p>
+                <table><tbody id="events-rows"></tbody></table>
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                  <input id="event-input" type="text" placeholder="event id (64 hex)" class="min-w-0 flex-1" />
+                  <input id="event-reason" type="text" placeholder="reason (optional)" class="min-w-0 flex-1" />
+                  <button data-action="ban-event" type="button" class="rounded bg-amber-700 px-3 py-1.5 text-sm hover:bg-amber-600">Ban event</button>
+                </div>
+              </div>
+              <p class="status text-sm mt-3"></p>
+            </section>
+
+            <section class="scope-relay rounded-lg border border-purple-700/50 p-4" data-panel="stats">
+              <div class="panel-head mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                <div>
+                  <h3 class="font-semibold">Statistics</h3>
+                  <p class="endpoint mono text-xs text-gray-500"></p>
+                </div>
+                <button data-action="load" type="button" class="rounded border border-gray-600 px-3 py-1 text-sm">Load</button>
+              </div>
+              <div class="panel-body" hidden>
+                <p class="text-xs text-gray-500 mb-3">
+                  Event counts are a full scan of each database, so the relay
+                  caches them for a minute.
+                </p>
+                <table><tbody id="stats-rows"></tbody></table>
+              </div>
+              <p class="status text-sm mt-3"></p>
+            </section>
+          </div>
+
+          <!-- global column -->
+          <div class="space-y-6">
+            <h2 class="scope-global rounded bg-gray-800/60 px-3 py-2 text-sm font-semibold text-amber-300">
+              All four relays
+            </h2>
+
+            <section class="scope-global rounded-lg border border-amber-600/40 p-4" data-panel="banned">
+              <div class="panel-head mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                <div>
+                  <h3 class="font-semibold">
+                    Banned pubkeys
+                    <span class="ml-1 rounded bg-amber-900 px-1.5 py-0.5 text-xs text-amber-200">GLOBAL</span>
+                  </h3>
+                  <p class="endpoint mono text-xs text-gray-500"></p>
+                </div>
+                <button data-action="load" type="button" class="rounded border border-gray-600 px-3 py-1 text-sm">Load</button>
+              </div>
+              <div class="panel-body" hidden>
+                <table><tbody id="banned-rows"></tbody></table>
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                  <input id="ban-input" type="text" placeholder="npub or hex" autocomplete="off" spellcheck="false" class="min-w-0 flex-1" />
+                  <input id="ban-reason" type="text" placeholder="reason (optional)" class="min-w-0 flex-1" />
+                  <button data-action="ban" type="button" class="rounded bg-amber-700 px-3 py-1.5 text-sm hover:bg-amber-600">Ban</button>
+                </div>
+              </div>
+              <p class="status text-sm mt-3"></p>
+            </section>
+
+            <section class="scope-global rounded-lg border border-amber-600/40 p-4" data-panel="allowed">
+              <div class="panel-head mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                <div>
+                  <h3 class="font-semibold">
+                    Allowed pubkeys
+                    <span class="ml-1 rounded bg-amber-900 px-1.5 py-0.5 text-xs text-amber-200">GLOBAL</span>
+                  </h3>
+                  <p class="endpoint mono text-xs text-gray-500"></p>
+                </div>
+                <button data-action="load" type="button" class="rounded border border-gray-600 px-3 py-1 text-sm">Load</button>
+              </div>
+              <div class="panel-body" hidden>
+                <p class="text-xs text-gray-500 mb-3">
+                  Allowed pubkeys get the same access as the owner: the private
+                  relay, outbox publishing, blossom uploads, and a bypass of the
+                  web of trust.
+                </p>
+                <table><tbody id="allowed-rows"></tbody></table>
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                  <input id="allow-input" type="text" placeholder="npub or hex" autocomplete="off" spellcheck="false" class="min-w-0 flex-1" />
+                  <input id="allow-reason" type="text" placeholder="reason (optional)" class="min-w-0 flex-1" />
+                  <button data-action="allow" type="button" class="rounded bg-purple-700 px-3 py-1.5 text-sm hover:bg-purple-600">Allow</button>
+                </div>
+              </div>
+              <p class="status text-sm mt-3"></p>
+            </section>
+
+            <section class="scope-global rounded-lg border border-amber-600/40 p-4" data-panel="ips">
+              <div class="panel-head mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                <div>
+                  <h3 class="font-semibold">
+                    Blocked IPs
+                    <span class="ml-1 rounded bg-amber-900 px-1.5 py-0.5 text-xs text-amber-200">GLOBAL</span>
+                  </h3>
+                  <p class="endpoint mono text-xs text-gray-500"></p>
+                </div>
+                <button data-action="load" type="button" class="rounded border border-gray-600 px-3 py-1 text-sm">Load</button>
+              </div>
+              <div class="panel-body" hidden>
+                <p class="text-xs text-amber-300/80 mb-3">
+                  Blocking your own address can lock you out of the relay. Blocks
+                  apply to websocket connections only, and are only as
+                  trustworthy as your reverse proxy's X-Forwarded-For handling.
+                </p>
+                <table><tbody id="ips-rows"></tbody></table>
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                  <input id="ip-input" type="text" placeholder="IP address" autocomplete="off" spellcheck="false" class="min-w-0 flex-1" />
+                  <input id="ip-reason" type="text" placeholder="reason (optional)" class="min-w-0 flex-1" />
+                  <button data-action="block-ip" type="button" class="rounded bg-amber-700 px-3 py-1.5 text-sm hover:bg-amber-600">Block</button>
+                </div>
+              </div>
+              <p class="status text-sm mt-3"></p>
+            </section>
+          </div>
+        </div>
+        </div>
+
+        <div id="view-media" role="tabpanel" aria-labelledby="view-tab-media" tabindex="-1" hidden>
+          <section class="scope-global rounded-lg border border-amber-600/40 p-4" data-panel="media">
+            <div class="panel-head mb-4 flex flex-wrap items-baseline justify-between gap-2">
+              <div>
+                <h3 class="font-semibold">
+                  Media library
+                  <span class="ml-1 rounded bg-amber-900 px-1.5 py-0.5 text-xs text-amber-200">GLOBAL</span>
+                </h3>
+                <p class="endpoint mono text-xs text-gray-500"></p>
+                <p class="text-xs text-gray-500">
+                  Blossom media is served by the outbox relay only. One signature
+                  loads the whole library; filtering, sorting and searching after
+                  that cost nothing.
+                </p>
+              </div>
+              <button data-action="load" type="button" class="rounded bg-amber-700 px-4 py-1.5 text-sm font-semibold hover:bg-amber-600">
+                Load media
+              </button>
+            </div>
+
+            <div class="panel-body" hidden>
+              <div class="mb-5 overflow-hidden rounded-lg border border-gray-700 bg-gray-800/60">
+                <div class="flex flex-wrap items-end gap-x-10 gap-y-4 px-5 py-4">
+                  <div>
+                    <p class="text-xs uppercase tracking-wide text-gray-500">Stored media</p>
+                    <p class="mt-1 flex items-baseline gap-2">
+                      <span id="media-total-bytes" class="mono text-3xl font-bold leading-none text-amber-300">—</span>
+                      <span id="media-total-count" class="text-sm text-gray-400"></span>
+                    </p>
+                  </div>
+                  <dl class="flex flex-wrap gap-x-8 gap-y-3 text-sm">
+                    <div>
+                      <dt class="text-xs uppercase tracking-wide text-gray-500">On disk</dt>
+                      <dd id="media-disk" class="mono text-gray-200">—</dd>
+                    </div>
+                    <div>
+                      <dt class="text-xs uppercase tracking-wide text-gray-500">Largest</dt>
+                      <dd id="media-largest" class="mono text-gray-200">—</dd>
+                    </div>
+                    <div>
+                      <dt class="text-xs uppercase tracking-wide text-gray-500">Newest</dt>
+                      <dd id="media-newest" class="text-gray-200">—</dd>
+                    </div>
+                    <div>
+                      <dt class="text-xs uppercase tracking-wide text-gray-500">Uploaders</dt>
+                      <dd id="media-uploaders" class="mono text-gray-200">—</dd>
+                    </div>
+                  </dl>
+                </div>
+                <div id="media-composition" class="composition-bar" role="img" aria-label="storage by media type"></div>
+                <p id="media-notes" class="border-t border-gray-700/60 px-5 py-2 text-xs text-gray-500" hidden></p>
+              </div>
+
+              <div class="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+                <div id="media-type-filters" class="flex flex-wrap gap-1" role="group" aria-label="Filter by type"></div>
+
+                <label class="sr-only" for="media-search">Search media</label>
+                <input
+                  id="media-search"
+                  type="text"
+                  inputmode="search"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="sha256, type or npub…"
+                  class="min-w-0 flex-1 basis-48"
+                />
+
+                <label class="text-xs text-gray-500">
+                  sort
+                  <select id="media-sort" class="ml-1 rounded border border-gray-600 bg-gray-800 px-2 py-1 text-sm text-gray-200">
+                    <option value="newest">newest first</option>
+                    <option value="oldest">oldest first</option>
+                    <option value="largest">largest first</option>
+                    <option value="smallest">smallest first</option>
+                    <option value="type">by type</option>
+                  </select>
+                </label>
+
+                <div id="media-density" class="flex rounded border border-gray-600" role="group" aria-label="View density">
+                  <button type="button" data-density="comfortable" aria-pressed="true" class="density-btn px-2 py-1 text-xs">Grid</button>
+                  <button type="button" data-density="compact" aria-pressed="false" class="density-btn border-l border-gray-600 px-2 py-1 text-xs">Dense</button>
+                  <button type="button" data-density="list" aria-pressed="false" class="density-btn border-l border-gray-600 px-2 py-1 text-xs">List</button>
+                </div>
+
+                <button id="media-select-mode" type="button" aria-pressed="false" class="rounded border border-gray-600 px-3 py-1 text-sm">Select</button>
+              </div>
+
+              <p id="media-stale" class="mb-3 rounded border border-amber-600 bg-amber-950/40 px-3 py-2 text-sm text-amber-200" hidden></p>
+
+              <ul id="media-grid" class="media-grid" aria-label="Stored media"></ul>
+
+              <div id="media-table-wrap" hidden>
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col" class="text-xs uppercase tracking-wide text-gray-500">Hash</th>
+                      <th scope="col" class="text-xs uppercase tracking-wide text-gray-500">Type</th>
+                      <th scope="col" class="text-xs uppercase tracking-wide text-gray-500 text-right">Size</th>
+                      <th scope="col" class="text-xs uppercase tracking-wide text-gray-500">Uploaded</th>
+                      <th scope="col" class="text-xs uppercase tracking-wide text-gray-500">Uploader</th>
+                      <th scope="col"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="media-rows"></tbody>
+                </table>
+              </div>
+
+              <p id="media-empty" class="rounded-lg border border-dashed border-gray-700 px-6 py-10 text-center text-sm text-gray-400" hidden></p>
+
+              <div id="media-sentinel" class="h-8" aria-hidden="true"></div>
+              <div class="mt-3 text-center">
+                <button id="media-more" type="button" class="rounded border border-gray-600 px-4 py-1.5 text-sm" hidden></button>
+              </div>
+
+              <div
+                id="media-selection"
+                class="selection-bar z-30 -mx-4 mt-4 flex flex-wrap items-center gap-3 px-4 py-3"
+                role="region"
+                aria-label="Selection"
+                hidden
+              >
+                <p class="text-sm">
+                  <span id="selection-count" class="font-semibold text-amber-300"></span>
+                  <span id="selection-bytes" class="mono text-gray-400"></span>
+                </p>
+                <p id="selection-hidden" class="text-xs text-amber-300/80" hidden></p>
+                <div class="ml-auto flex flex-wrap gap-2">
+                  <button id="selection-all" type="button" class="rounded border border-gray-600 px-3 py-1.5 text-sm"></button>
+                  <button id="selection-clear" type="button" class="rounded border border-gray-600 px-3 py-1.5 text-sm">Clear</button>
+                  <button id="selection-block" type="button" class="rounded border border-amber-600/60 px-3 py-1.5 text-sm text-amber-200">Block hashes</button>
+                  <button id="selection-delete" type="button" class="rounded bg-amber-700 px-3 py-1.5 text-sm font-semibold hover:bg-amber-600"></button>
+                </div>
+              </div>
+            </div>
+
+            <p class="status text-sm mt-3" aria-live="polite"></p>
+          </section>
+
+          <section class="scope-global mt-6 rounded-lg border border-amber-600/40 p-4" data-panel="media-blocked">
+            <div class="panel-head mb-3 flex flex-wrap items-baseline justify-between gap-2">
+              <div>
+                <h3 class="font-semibold">
+                  Blocked hashes
+                  <span class="ml-1 rounded bg-amber-900 px-1.5 py-0.5 text-xs text-amber-200">GLOBAL</span>
+                </h3>
+                <p class="endpoint mono text-xs text-gray-500"></p>
+              </div>
+              <button data-action="load" type="button" class="rounded border border-gray-600 px-3 py-1 text-sm">Load</button>
+            </div>
+            <div class="panel-body" hidden>
+              <p class="text-xs text-gray-500 mb-3">
+                A blocked hash cannot be uploaded again and is no longer served.
+                Blobs go out with a week of immutable caching, so a copy that was
+                already fetched stays fetched — blocking is not a recall.
+              </p>
+              <table><tbody id="blocked-rows"></tbody></table>
+            </div>
+            <p class="status text-sm mt-3" aria-live="polite"></p>
+          </section>
+
+          <section class="scope-global mt-6 rounded-lg border border-amber-600/40 p-4" data-panel="media-orphans">
+            <div class="panel-head mb-3 flex flex-wrap items-baseline justify-between gap-2">
+              <div>
+                <h3 class="font-semibold">
+                  Reconciliation
+                  <span class="ml-1 rounded bg-amber-900 px-1.5 py-0.5 text-xs text-amber-200">GLOBAL</span>
+                </h3>
+                <p class="endpoint mono text-xs text-gray-500"></p>
+                <p class="text-xs text-gray-500">compares the blob index against the files on disk</p>
+              </div>
+              <button data-action="load" type="button" class="rounded border border-gray-600 px-3 py-1 text-sm">Load</button>
+            </div>
+            <div class="panel-body" hidden>
+              <div id="orphan-cards" class="grid gap-4 md:grid-cols-2 items-start"></div>
+              <p id="orphan-grace" class="mt-3 text-xs text-gray-500"></p>
+            </div>
+            <p class="status text-sm mt-3" aria-live="polite"></p>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <dialog id="media-dialog" class="media-drawer" aria-labelledby="media-dialog-title">
+      <div class="flex h-full flex-col">
+        <header class="flex items-start justify-between gap-3 border-b border-gray-700 px-5 py-3">
+          <h3 id="media-dialog-title" class="mono break-all text-sm text-amber-300"></h3>
+          <button id="media-dialog-close" type="button" class="shrink-0 rounded border border-gray-600 px-2 py-1 text-xs">Close</button>
+        </header>
+        <div id="media-dialog-preview" class="flex min-h-40 flex-1 items-center justify-center overflow-auto bg-gray-950 p-4"></div>
+        <dl id="media-dialog-meta" class="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2 border-t border-gray-700 px-5 py-4 text-sm"></dl>
+        <footer class="flex flex-wrap gap-2 border-t border-gray-700 px-5 py-3">
+          <button id="media-copy-url" type="button" class="rounded border border-gray-600 px-3 py-1.5 text-sm">Copy URL</button>
+          <button id="media-copy-hash" type="button" class="rounded border border-gray-600 px-3 py-1.5 text-sm">Copy sha256</button>
+          <button id="media-block" type="button" class="ml-auto rounded border border-amber-600/60 px-3 py-1.5 text-sm text-amber-200"></button>
+          <button id="media-delete" type="button" class="rounded bg-amber-700 px-3 py-1.5 text-sm font-semibold hover:bg-amber-600">Delete</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <dialog id="note-dialog" class="side-drawer" aria-labelledby="note-dialog-title">
+      <div class="flex h-full flex-col">
+        <header class="flex items-start justify-between gap-3 border-b border-gray-700 px-5 py-3">
+          <div class="min-w-0">
+            <p id="note-dialog-kind" class="text-xs text-gray-400"></p>
+            <h3 id="note-dialog-title" class="mono break-all text-sm text-purple-300"></h3>
+          </div>
+          <div class="flex shrink-0 gap-1">
+            <button id="note-prev" type="button" class="rounded border border-gray-600 px-2 py-1 text-xs" aria-label="Previous event">&#8593;</button>
+            <button id="note-next" type="button" class="rounded border border-gray-600 px-2 py-1 text-xs" aria-label="Next event">&#8595;</button>
+            <button id="note-dialog-close" type="button" class="rounded border border-gray-600 px-2 py-1 text-xs">Close</button>
+          </div>
+        </header>
+        <div id="note-dialog-body" class="flex-1 overflow-auto px-5 py-4"></div>
+        <details class="border-t border-gray-700 px-5 py-3">
+          <summary class="cursor-pointer text-xs text-gray-400">Raw event</summary>
+          <pre id="note-dialog-json" class="mono mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all text-[11px] text-gray-300"></pre>
+        </details>
+        <footer class="flex flex-wrap gap-2 border-t border-gray-700 px-5 py-3">
+          <button id="note-copy-id" type="button" class="rounded border border-gray-600 px-3 py-1.5 text-sm">Copy id</button>
+          <button id="note-copy-npub" type="button" class="rounded border border-gray-600 px-3 py-1.5 text-sm">Copy npub</button>
+          <button id="note-copy-json" type="button" class="rounded border border-gray-600 px-3 py-1.5 text-sm">Copy JSON</button>
+          <button id="note-delete" type="button" class="ml-auto rounded bg-purple-700 px-3 py-1.5 text-sm font-semibold hover:bg-purple-600"></button>
+        </footer>
+      </div>
+    </dialog>
+
+    <dialog id="confirm-dialog">
+      <form method="dialog" class="p-5">
+        <h3 id="confirm-title" class="mb-2 text-lg font-semibold"></h3>
+        <p id="confirm-body" class="mb-2 text-sm text-gray-300"></p>
+        <p id="confirm-detail" class="mono mb-4 break-all text-xs text-gray-400"></p>
+        <div id="confirm-options" class="mb-4 space-y-2" hidden></div>
+        <label id="confirm-typed-wrap" class="mb-4 block text-sm" hidden>
+          <span class="text-gray-400">Type <span class="mono text-amber-300" id="confirm-typed-word"></span> to confirm</span>
+          <input id="confirm-typed" type="text" autocomplete="off" spellcheck="false" class="mt-1 w-full" />
+        </label>
+        <div class="flex justify-end gap-2">
+          <button value="cancel" class="rounded border border-gray-600 px-4 py-1.5 text-sm">Cancel</button>
+          <button id="confirm-ok" value="ok" class="rounded bg-amber-700 px-4 py-1.5 text-sm font-semibold hover:bg-amber-600">Confirm</button>
+        </div>
+      </form>
+    </dialog>
+
+    <footer class="mt-10 border-t border-gray-800 py-6 text-center text-sm text-gray-500">
+      <p class="mx-auto max-w-3xl px-4">
+        Access control on HAVEN comes from four places and this page controls
+        only the NIP-86 lists: your whitelist file, your blacklist file, the
+        kind 10084 ban list you publish, and the relay management API. Media
+        deletions apply to the blossom store immediately and cannot be undone.
+      </p>
+      <p class="mt-2">
+        <a href="https://github.com/barrydeen/haven" class="underline">HAVEN</a>
+        ·
+        <a href="https://github.com/nostr-protocol/nips/blob/master/86.md" class="underline">NIP-86</a>
+      </p>
+    </footer>
+
+    {{range .Scripts}}<script src="{{.Src}}?v={{.Version}}" defer></script>
+    {{end}}
+  </body>
+</html>

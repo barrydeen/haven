@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"runtime/debug"
 	"strconv"
@@ -63,6 +64,16 @@ type Config struct {
 	WotRefreshInterval                   time.Duration       `json:"wot_refresh_interval"`
 	WhitelistedPubKeys                   map[string]struct{} `json:"whitelisted_pubkeys"`
 	BlacklistedPubKeys                   map[string]struct{} `json:"blacklisted_pubkeys"`
+	ManagementAPIEnabled                 bool                `json:"management_api_enabled"`
+	ManagementStateFile                  string              `json:"management_state_file"`
+	AnalyticsEnabled                     bool                `json:"analytics_enabled"`
+	AnalyticsStateFile                   string              `json:"analytics_state_file"`
+	AnalyticsFlushMinutes                int                 `json:"analytics_flush_minutes"`
+	AnalyticsHourlyRetentionDays         int                 `json:"analytics_hourly_retention_days"`
+	AnalyticsDailyRetentionDays          int                 `json:"analytics_daily_retention_days"`
+	AnalyticsAggregateMinutes            int                 `json:"analytics_aggregate_minutes"`
+	AnalyticsMaxKinds                    int                 `json:"analytics_max_kinds"`
+	AnalyticsMaxAuthors                  int                 `json:"analytics_max_authors"`
 	LogLevel                             string              `json:"log_level"`
 	BlastrRelays                         []string            `json:"blastr_relays"`
 	BlastrTimeoutSeconds                 int                 `json:"blastr_timeout_seconds"`
@@ -115,6 +126,16 @@ func loadConfig() Config {
 		WotRefreshInterval:                   getEnvDuration("WOT_REFRESH_INTERVAL", 24*time.Hour),
 		WhitelistedPubKeys:                   getNpubsFromFile(getEnvString("WHITELISTED_NPUBS_FILE", "")),
 		BlacklistedPubKeys:                   getNpubsFromFile(getEnvString("BLACKLISTED_NPUBS_FILE", "")),
+		ManagementAPIEnabled:                 getEnvBool("MANAGEMENT_API_ENABLED", true),
+		ManagementStateFile:                  getEnvString("MANAGEMENT_STATE_FILE", "management.json"),
+		AnalyticsEnabled:                     getEnvBool("ANALYTICS_ENABLED", true),
+		AnalyticsStateFile:                   getEnvString("ANALYTICS_STATE_FILE", "metrics.json"),
+		AnalyticsFlushMinutes:                getEnvInt("ANALYTICS_FLUSH_MINUTES", 5),
+		AnalyticsHourlyRetentionDays:         getEnvInt("ANALYTICS_HOURLY_RETENTION_DAYS", 8),
+		AnalyticsDailyRetentionDays:          getEnvInt("ANALYTICS_DAILY_RETENTION_DAYS", 90),
+		AnalyticsAggregateMinutes:            getEnvInt("ANALYTICS_AGGREGATE_MINUTES", 15),
+		AnalyticsMaxKinds:                    getEnvInt("ANALYTICS_MAX_KINDS", 64),
+		AnalyticsMaxAuthors:                  getEnvInt("ANALYTICS_MAX_AUTHORS", 100),
 		LogLevel:                             getEnvString("HAVEN_LOG_LEVEL", "INFO"),
 		BlastrRelays:                         getRelayListFromFile(getEnv("BLASTR_RELAYS_FILE")),
 		BlastrTimeoutSeconds:                 getEnvInt("BLASTR_TIMEOUT_SECONDS", 5),
@@ -123,6 +144,8 @@ func loadConfig() Config {
 
 	// Relay owner is always whitelisted
 	cfg.WhitelistedPubKeys[cfg.OwnerPubKey] = struct{}{}
+
+	clampAnalyticsConfig(&cfg)
 
 	return cfg
 
@@ -287,3 +310,37 @@ var art = `
 ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═══╝
 HIGH AVAILABILITY VAULT FOR EVENTS ON NOSTR
 	`
+
+// clampAnalyticsConfig brings nonsense into range and says so, rather than
+// refusing to boot.
+//
+// The env helpers log.Fatalf on a value that is not a number, which is right: the
+// operator typed something that is not an integer. A value that is a number but
+// absurd is a different thing, and taking a relay offline over a retention of
+// zero days would be a worse outcome than a warning and a default — the same
+// reasoning as the graceful startup handling in 8d26f9e.
+func clampAnalyticsConfig(cfg *Config) {
+	clamp := func(name string, value *int, lo, hi, def int) {
+		if *value >= lo && *value <= hi {
+			return
+		}
+		slog.Warn("⚠️ analytics setting out of range, using the default instead",
+			"setting", name, "given", *value, "min", lo, "max", hi, "using", def)
+		*value = def
+	}
+
+	clamp("ANALYTICS_FLUSH_MINUTES", &cfg.AnalyticsFlushMinutes, 1, 60, 5)
+	clamp("ANALYTICS_HOURLY_RETENTION_DAYS", &cfg.AnalyticsHourlyRetentionDays, 1, 400, 8)
+	clamp("ANALYTICS_DAILY_RETENTION_DAYS", &cfg.AnalyticsDailyRetentionDays, 1, 3650, 90)
+	clamp("ANALYTICS_AGGREGATE_MINUTES", &cfg.AnalyticsAggregateMinutes, 1, 1440, 15)
+	clamp("ANALYTICS_MAX_KINDS", &cfg.AnalyticsMaxKinds, 8, 4096, 64)
+	clamp("ANALYTICS_MAX_AUTHORS", &cfg.AnalyticsMaxAuthors, 1, 1000, 100)
+
+	// daily has to cover at least as long as hourly, or rolling an hour up would
+	// drop it into a window that has already been pruned
+	if cfg.AnalyticsDailyRetentionDays < cfg.AnalyticsHourlyRetentionDays {
+		slog.Warn("⚠️ daily analytics retention is shorter than hourly, raising it to match",
+			"hourly_days", cfg.AnalyticsHourlyRetentionDays, "daily_days", cfg.AnalyticsDailyRetentionDays)
+		cfg.AnalyticsDailyRetentionDays = cfg.AnalyticsHourlyRetentionDays
+	}
+}

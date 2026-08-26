@@ -20,15 +20,19 @@ type SimpleInMemory struct {
 	pubkeys atomic.Pointer[map[string]bool]
 
 	// Dependencies for Refresh
-	Pool               *nostr.SimplePool
-	WhitelistedPubKeys map[string]struct{}
+	Pool *nostr.SimplePool
+	// WhitelistedPubKeys supplies the seed set on every refresh. It is a
+	// function rather than a map because the set can grow at runtime, and
+	// because returning a fresh map each call keeps the refresher off a map the
+	// caller may be writing to.
+	WhitelistedPubKeys func() map[string]struct{}
 	SeedRelays         []string
 	WotDepth           int
 	MinFollowers       int
 	WotFetchTimeout    int
 }
 
-func NewSimpleInMemory(pool *nostr.SimplePool, whitelistedPubKeys map[string]struct{}, seedRelays []string, wotDepth int, minFollowers int, wotFetchTimeout int) *SimpleInMemory {
+func NewSimpleInMemory(pool *nostr.SimplePool, whitelistedPubKeys func() map[string]struct{}, seedRelays []string, wotDepth int, minFollowers int, wotFetchTimeout int) *SimpleInMemory {
 	return &SimpleInMemory{
 		Pool:               pool,
 		WhitelistedPubKeys: whitelistedPubKeys,
@@ -81,8 +85,12 @@ func (wt *SimpleInMemory) Refresh(ctx context.Context) {
 	oneHopNetwork := make(map[string]bool)
 	newWot := make(map[string]bool)
 
+	// read the seed set once: it is rebuilt on every call, and the whole
+	// refresh has to work from one consistent view of it
+	seeds := wt.WhitelistedPubKeys()
+
 	if wt.WotDepth >= 1 {
-		for pubkey := range wt.WhitelistedPubKeys {
+		for pubkey := range seeds {
 			newWot[pubkey] = true
 		}
 	}
@@ -97,7 +105,7 @@ func (wt *SimpleInMemory) Refresh(ctx context.Context) {
 	defer cancel()
 
 	filter := nostr.Filter{
-		Authors: slices.Collect(maps.Keys(wt.WhitelistedPubKeys)),
+		Authors: slices.Collect(maps.Keys(seeds)),
 		Kinds:   []int{nostr.KindFollowList},
 	}
 
