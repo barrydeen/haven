@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/fiatjaf/khatru"
 	"github.com/nbd-wtf/go-nostr"
@@ -37,6 +38,11 @@ func main() {
 	if err := fs.MkdirAll(config.BlossomPath, 0755); err != nil {
 		log.Fatal("🚫 error creating blossom path:", err)
 	}
+	checkBlobPath()
+
+	// before the subcommand switch below, so backup, restore and import get the
+	// same view of who is banned and allowed as the relay does
+	loadManagementStore()
 
 	pool = nostr.NewSimplePool(mainCtx,
 		nostr.WithPenaltyBox(),
@@ -73,13 +79,13 @@ func main() {
 
 	log.Println("🚀 HAVEN", config.RelayVersion, "is booting up")
 	defer log.Println("🔌 HAVEN is shutting down")
-	log.Println("👥 Number of whitelisted pubkeys:", len(config.WhitelistedPubKeys))
+	log.Println("👥 Number of whitelisted pubkeys:", len(whitelistedPubKeySet()))
 	log.Println("🚷 Number of blacklisted pubkeys:", len(config.BlacklistedPubKeys))
 
 	ensureImportRelays()
 	wotModel := wot.NewSimpleInMemory(
 		pool,
-		config.WhitelistedPubKeys,
+		whitelistedPubKeySet,
 		config.ImportSeedRelays,
 		config.WotDepth,
 		config.WotMinimumFollowers,
@@ -88,13 +94,26 @@ func main() {
 	wot.Initialize(mainCtx, wotModel)
 	initRelays(mainCtx)
 
+	// after initRelays, because instrument() is what creates the per relay
+	// counters this reads a history into, and before the goroutines below so the
+	// first fold has something to fold onto
+	loadMetricsStore()
+
 	go func() {
 		go subscribeInboxAndChat(mainCtx)
 		go startPeriodicCloudBackups(mainCtx)
 		go wot.PeriodicRefresh(mainCtx, config.WotRefreshInterval)
+		go runMetrics(mainCtx)
+		go runAggregates(mainCtx)
 	}()
 
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("templates/static"))))
+	http.HandleFunc("/admin", adminHandler)
+	// without this "/admin/" would fall through to the catch-all below, reach
+	// the outbox relay and come back as a bare 404
+	http.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin", http.StatusMovedPermanently)
+	})
 	http.HandleFunc("/", dynamicRelayHandler)
 
 	addr := fmt.Sprintf("%s:%d", config.RelayBindAddress, config.RelayPort)
@@ -122,23 +141,39 @@ func printHelp() {
 }
 
 func dynamicRelayHandler(w http.ResponseWriter, r *http.Request) {
-	var relay *khatru.Relay
-	relayType := r.URL.Path
+	relay, relayName, exact := relayForPath(r.URL.Path)
 
-	switch relayType {
-	case "/private":
-		relay = privateRelay
-	case "/chat":
-		relay = chatRelay
-	case "/inbox":
-		relay = inboxRelay
-	case "":
-		relay = outboxRelay
-	default:
-		relay = outboxRelay
+	// NIP-86 is answered ahead of khatru: khatru reports auth failures as HTTP
+	// 200 where the NIP asks for a 401, never checks the auth event's kind or
+	// method tag, and has no way to tell haven's four relays apart
+	if isNIP86Request(r) {
+		handleManagementRequest(w, r, relay, relayName, exact)
+		return
 	}
 
 	relay.ServeHTTP(w, r)
+}
+
+// relayForPath maps a request path onto one of the four relays. exact reports
+// whether the path names that relay outright: everything unmatched lands on the
+// outbox relay, which also serves blossom, so a caller that needs to know it is
+// really addressing a relay — NIP-86 does, it lives on the relay's own URI and
+// nowhere else — has to ask.
+func relayForPath(path string) (*khatru.Relay, string, bool) {
+	// trailing slashes used to fall through to the outbox relay, so "/private/"
+	// silently served the wrong one
+	switch strings.TrimSuffix(path, "/") {
+	case "/private":
+		return privateRelay, relayPrivate, true
+	case "/chat":
+		return chatRelay, relayChat, true
+	case "/inbox":
+		return inboxRelay, relayInbox, true
+	case "":
+		return outboxRelay, relayOutbox, true
+	default:
+		return outboxRelay, relayOutbox, false
+	}
 }
 
 func getLogLevelFromConfig() slog.Level {

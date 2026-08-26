@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
-	"maps"
 	"os"
-	"slices"
 	"time"
 
 	"github.com/fiatjaf/eventstore"
@@ -57,7 +55,7 @@ func runImport(ctx context.Context) {
 	loadBanList(ctx)
 	wotModel := wot.NewSimpleInMemory(
 		pool,
-		config.WhitelistedPubKeys,
+		whitelistedPubKeySet,
 		config.ImportSeedRelays,
 		config.WotDepth,
 		config.WotMinimumFollowers,
@@ -87,7 +85,7 @@ func importOwnerNotes(ctx context.Context) {
 		endTimestamp := nostr.Timestamp(endTime.Unix())
 
 		filter := nostr.Filter{
-			Authors: slices.Collect(maps.Keys(config.WhitelistedPubKeys)),
+			Authors: whitelistedPubKeys(),
 			Since:   &startTimestamp,
 			Until:   &endTimestamp,
 		}
@@ -109,8 +107,12 @@ func importOwnerNotes(ctx context.Context) {
 					slog.Debug("🚫 skipping event from blacklisted pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 					continue
 				}
-				if bannedPubKeys.has(ev.PubKey) {
+				if isBanned(ev.PubKey) {
 					slog.Debug("🚫 skipping event from banned pubkey", "pubkey", ev.PubKey, "id", ev.ID)
+					continue
+				}
+				if isBannedEvent(relayOutbox, ev.ID) {
+					slog.Debug("🚫 skipping banned event", "id", ev.ID)
 					continue
 				}
 				if isDeleted(ctx, outboxDB, ev.Event) {
@@ -165,7 +167,7 @@ func importTaggedNotes(ctx context.Context) {
 	wdbChat := eventstore.RelayWrapper{Store: chatDB}
 	filter := nostr.Filter{
 		Tags: nostr.TagMap{
-			"p": slices.Collect(maps.Keys(config.WhitelistedPubKeys)),
+			"p": whitelistedPubKeys(),
 		},
 	}
 
@@ -183,7 +185,7 @@ func importTaggedNotes(ctx context.Context) {
 				continue
 			}
 
-			if bannedPubKeys.has(ev.PubKey) {
+			if isBanned(ev.PubKey) {
 				slog.Debug("🚫 skipping tagged event from banned pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 				continue
 			}
@@ -195,12 +197,18 @@ func importTaggedNotes(ctx context.Context) {
 				if len(tag) < 2 {
 					continue
 				}
-				if _, ok := config.WhitelistedPubKeys[tag[1]]; ok {
+				if isWhitelisted(tag[1]) {
 					dbToWrite := wdbInbox
 					dbToCheck := inboxDB
+					relayToCheck := relayInbox
 					if ev.Kind == nostr.KindGiftWrap {
 						dbToWrite = wdbChat
 						dbToCheck = chatDB
+						relayToCheck = relayChat
+					}
+					if isBannedEvent(relayToCheck, ev.ID) {
+						slog.Debug("🚫 skipping banned tagged event", "id", ev.ID)
+						break
 					}
 					if isDeleted(ctx, dbToCheck, ev.Event) {
 						slog.Debug("🚫 skipping deleted tagged event", "id", ev.ID)
@@ -232,7 +240,7 @@ func subscribeInboxAndChat(ctx context.Context) {
 	startTime := nostr.Timestamp(time.Now().Add(-time.Minute * 5).Unix())
 	filter := nostr.Filter{
 		Tags: nostr.TagMap{
-			"p": slices.Collect(maps.Keys(config.WhitelistedPubKeys)),
+			"p": whitelistedPubKeys(),
 		},
 		Since: &startTime,
 	}
@@ -244,7 +252,7 @@ func subscribeInboxAndChat(ctx context.Context) {
 			slog.Debug("🚫discarding imported note from blacklisted pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 			continue
 		}
-		if bannedPubKeys.has(ev.PubKey) {
+		if isBanned(ev.PubKey) {
 			slog.Debug("🚫 discarding imported note from banned pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 			continue
 		}
@@ -255,12 +263,19 @@ func subscribeInboxAndChat(ctx context.Context) {
 			if len(tag) < 2 {
 				continue
 			}
-			if _, ok := config.WhitelistedPubKeys[tag[1]]; ok {
+			if isWhitelisted(tag[1]) {
 				dbToPublish := wdbInbox
 				dbToCheck := inboxDB
+				relayToCheck := relayInbox
 				if ev.Kind == nostr.KindGiftWrap {
 					dbToPublish = wdbChat
 					dbToCheck = chatDB
+					relayToCheck = relayChat
+				}
+
+				if isBannedEvent(relayToCheck, ev.ID) {
+					slog.Debug("🚫 discarding banned event", "id", ev.ID)
+					break
 				}
 
 				slog.Debug("ℹ️ importing event", "kind", ev.Kind, "id", ev.ID, "relay", ev.Relay.URL)

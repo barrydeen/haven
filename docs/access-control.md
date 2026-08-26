@@ -8,7 +8,7 @@ Whitelisting grants specific npubs the same permissions as the relay owner.
 
 ### Permissions granted to whitelisted npubs:
 - **Outbox Publishing**: Ability to publish notes to your outbox relay.
-- **Blossom Media Server**: Ability to upload to your Blossom server.
+- **Blossom Media Server**: Ability to upload to your Blossom server, unless the blob's hash is on the relay's [blocklist](relay-management.md#deleting-and-blocking).
 - **Private Relay Access**: Ability to read and write to your private relay (`/private`).
 - **Web of Trust Bypass**: Whitelisted users are automatically trusted and do not need to be part of your Web of Trust 
   to interact with your Chat and Inbox relays.
@@ -101,6 +101,10 @@ version replaces the last: publish the full list every time, not just the pubkey
 > Only the owner's list counts — a kind `10084` from anybody else is stored like any other event and ignored. Private
 > (NIP-44 encrypted) list entries are not supported, since the relay has no key to decrypt them with.
 
+Bans can also be applied over the [relay management API](relay-management.md), which keeps its own list in
+`management.json`. The two are unioned, and `listbannedpubkeys` says which source each ban came from. The API cannot
+lift a ban that came from your kind `10084` list, because the relay has no key to sign a replacement list with.
+
 > [!IMPORTANT]
 > Banning stops writes, not reads, and gift wrapped messages are signed with throwaway keys, so a ban only stops those
 > when the sender is authenticated. Events a banned user published before the ban stay in your database; delete them
@@ -124,6 +128,10 @@ if it shows up while importing from your seed relays.
 > [!NOTE]
 > Deleting an event only removes it from your Haven relay. Copies on other relays are unaffected, though a delete
 > request published to your outbox relay is blasted onwards like any other event.
+
+The [relay management API](relay-management.md) can drop an event too, with `banevent`. That deletes the stored copy
+and refuses it if anybody publishes it again, but it writes no delete request — the relay cannot sign one — so
+nothing is blasted onwards.
 
 ---
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"log/slog"
+	"maps"
+	"slices"
 	"sync/atomic"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -64,6 +66,16 @@ func (bl *banList) has(pubKey string) bool {
 	}
 	_, ok := cached.pubkeys[pubKey]
 	return ok
+}
+
+// list returns the pubkeys on the cached ban list, sorted, so the management
+// API can report what is banned and say where each ban came from.
+func (bl *banList) list() []string {
+	cached := bl.state.Load()
+	if cached == nil {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(cached.pubkeys))
 }
 
 func (bl *banList) size() int {
