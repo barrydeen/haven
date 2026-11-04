@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/fiatjaf/khatru"
+	"github.com/joho/godotenv"
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/spf13/afero"
 
@@ -27,6 +28,10 @@ var (
 func main() {
 	// loaded here, not at package-var time: a test binary would hit loadConfig's
 	// log.Fatalf before TestMain gets a chance to seed the environment
+	//
+	// .env seeding stays out of loadConfig, which reads only the process env:
+	// a maintainer's .env must not decide what tests do
+	_ = godotenv.Load(".env") // missing file is a clean checkout's normal state
 	config = loadConfig()
 
 	nostr.InfoLogger = log.New(io.Discard, "", 0)

@@ -11,8 +11,9 @@ import (
 // test files, so a package-var load would exit inside init with
 // "Environment variable OWNER_NPUB not set" before any test could run.
 //
-// The relay's own .env is not used: a test that behaved differently on the
-// maintainer's machine than in CI would be worse than no test.
+// loadConfig reads only the process environment: it never consults the relay's
+// own .env, so tests behave identically regardless of what a maintainer has on
+// disk.
 func TestMain(m *testing.M) {
 	seedTestEnv()
 	config = loadConfig()
