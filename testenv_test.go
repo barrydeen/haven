@@ -1,21 +1,25 @@
 package main
 
-import "os"
+import (
+	"os"
+	"testing"
+)
 
-// seedTestEnv fills in the environment loadConfig insists on before the package
-// level `config = loadConfig()` in config.go gets to run.
-//
-// It is a variable rather than an init() on purpose: package level variables are
-// initialised before init() functions, and files are processed in sorted order,
-// so this file's name is what puts it ahead of config.go. That is load bearing —
-// renaming this file breaks every test in the package with a log.Fatalf about
-// OWNER_NPUB rather than a test failure.
+// TestMain seeds the environment loadConfig insists on and loads the package
+// config before any test runs. loadConfig does not run at package-var time
+// (main.go loads it in main()): go test always presents non-test files before
+// test files, so a package-var load would exit inside init with
+// "Environment variable OWNER_NPUB not set" before any test could run.
 //
 // The relay's own .env is not used: a test that behaved differently on the
 // maintainer's machine than in CI would be worse than no test.
-var _ = seedTestEnv()
+func TestMain(m *testing.M) {
+	seedTestEnv()
+	config = loadConfig()
+	os.Exit(m.Run())
+}
 
-func seedTestEnv() bool {
+func seedTestEnv() {
 	env := map[string]string{
 		"OWNER_NPUB":                "npub1utx00neqgqln72j22kej3ux7803c2k986henvvha4thuwfkper4s7r50e8",
 		"RELAY_URL":                 "localhost:3355",
@@ -40,7 +44,6 @@ func seedTestEnv() bool {
 		"BLASTR_RELAYS_FILE":        "relays_blastr.example.json",
 	}
 	for k, v := range env {
-		os.Setenv(k, v)
+		_ = os.Setenv(k, v)
 	}
-	return true
 }

@@ -20,11 +20,15 @@ import (
 
 var (
 	pool   *nostr.SimplePool
-	config = loadConfig()
+	config Config
 	fs     afero.Fs
 )
 
 func main() {
+	// loaded here, not at package-var time: a test binary would hit loadConfig's
+	// log.Fatalf before TestMain gets a chance to seed the environment
+	config = loadConfig()
+
 	nostr.InfoLogger = log.New(io.Discard, "", 0)
 	slog.SetLogLoggerLevel(getLogLevelFromConfig())
 	green := "\033[32m"
