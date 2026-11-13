@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/joho/godotenv"
 	"github.com/nbd-wtf/go-nostr/nip19"
 )
 
@@ -83,8 +82,6 @@ type Config struct {
 const relaySoftware = "https://github.com/barrydeen/haven"
 
 func loadConfig() Config {
-	_ = godotenv.Load(".env")
-
 	cfg := Config{
 		OwnerNpub:                            getEnv("OWNER_NPUB"),
 		OwnerPubKey:                          nPubToPubkey("OWNER_NPUB", getEnv("OWNER_NPUB")),
