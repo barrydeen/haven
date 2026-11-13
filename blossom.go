@@ -253,7 +253,7 @@ func scanBlobDir(ctx context.Context) (map[string]diskBlob, int, error) {
 		}
 		return nil, 0, err
 	}
-	defer handle.Close()
+	defer func() { _ = handle.Close() }()
 
 	blobs := make(map[string]diskBlob)
 	skipped := 0
