@@ -195,17 +195,12 @@ func queryPageSize(db DBBackend) int {
 // backendCountsSafely reports whether a backend's own CountEvents can be
 // trusted to return.
 //
-// It cannot on lmdb. eventstore v0.17.5's lmdb/count.go advances its cursor only
-// on the paths where an event is *rejected* by an extra author, kind or tag
-// check — the two paths that actually increment the counter both fall through to
-// the top of the loop without calling it.next(), so the cursor sits on the first
-// matching event and counts it forever. A filter matching nothing returns zero
-// correctly; a filter matching anything never returns at all, on a goroutine that
-// never looks at the context, so it cannot even be cancelled.
-//
-// That matters here because DB_ENGINE defaults to lmdb and CountEvents(Filter{})
-// is what the stats method is built on. countStoredEvents walks instead when
-// this is false.
+// Upstream eventstore v0.17.5's LMDB CountEvents does not advance its cursor
+// after a match, so a NIP-45 COUNT pegs a core until the process exits. The
+// go.mod replace points at ./third_party/eventstore, v0.17.5 plus that cursor fix, and
+// the websocket relays call db.CountEvents on that build. This still returns
+// false for lmdb so the admin console keeps walking if the replace is dropped.
+// countStoredEvents walks instead when this is false.
 func backendCountsSafely(db DBBackend) bool {
 	switch db.(type) {
 	case *badger.BadgerBackend:

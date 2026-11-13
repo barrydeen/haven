@@ -302,11 +302,10 @@ func findStoredEvents(ctx context.Context, db DBBackend, ids []string) (map[stri
 // countStoredEvents counts the events matching a filter, and says whether the
 // number is exact.
 //
-// It exists because one of the two backends cannot count. See
-// backendCountsSafely: eventstore v0.17.5's lmdb CountEvents never advances its
-// cursor once it finds a match, so it spins forever on a goroutine that ignores
-// the context. Calling it on an lmdb store — which is what DB_ENGINE defaults to
-// — hangs the caller permanently and burns a core doing it.
+// It exists because upstream eventstore v0.17.5's LMDB CountEvents never
+// advances its cursor once it finds a match. The go.mod replace carries the
+// fix for websocket COUNT. See backendCountsSafely: the admin path still walks
+// when that reports false, so dropping the replace cannot hang the console.
 //
 // Where CountEvents is safe it is used, because counting index keys is far
 // cheaper than decoding every event. Where it is not, this walks with eachEvent

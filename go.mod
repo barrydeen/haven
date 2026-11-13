@@ -76,3 +76,9 @@ require (
 	golang.org/x/text v0.34.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
+
+// v0.17.5 LMDB CountEvents never advances the cursor after a match, so one
+// NIP-45 COUNT pegs a core until the process exits. ./third_party/eventstore is
+// that release plus the cursor fix (fiatjaf/eventstore#78). LMDB files are
+// unchanged from v0.17.5 through v0.17.14, so existing databases stay compatible.
+replace github.com/fiatjaf/eventstore => ./third_party/eventstore

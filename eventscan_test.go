@@ -266,20 +266,11 @@ func TestFindStoredEventsReturnsWholeEvents(t *testing.T) {
 	}
 }
 
-// TestCountStoredEventsTerminatesOnEveryBackend is a regression test for an
-// upstream bug, not for haven's own logic.
-//
-// eventstore v0.17.5's lmdb CountEvents advances its cursor only on the paths
-// where an event is rejected by an extra author, kind or tag check; both paths
-// that increment the counter fall through to the top of the loop without calling
-// it.next(). So a filter that matches nothing returns zero correctly and a filter
-// that matches anything never returns at all — on a goroutine that never checks
-// the context, holding whatever lock the caller took.
-//
-// DB_ENGINE defaults to lmdb and the stats method counts every database with an
-// empty filter, so this is the difference between a working relay console and one
-// that hangs on first use. If this test ever starts failing because the walk is
-// no longer needed, check the upstream fix before deleting countStoredEvents.
+// TestCountStoredEventsTerminatesOnEveryBackend is a regression test for the
+// admin count path. Upstream eventstore v0.17.5's LMDB CountEvents spins on
+// the first match. Websocket COUNT uses the patched module in ./third_party/eventstore.
+// The console still goes through countStoredEvents, which must return even if
+// that replace is removed.
 func TestCountStoredEventsTerminatesOnEveryBackend(t *testing.T) {
 	db := newTestDB(t, 10)
 	seedEvents(t, db, []nostr.Timestamp{1700000001, 1700000002, 1700000003})
