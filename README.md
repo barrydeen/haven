@@ -473,6 +473,20 @@ Despite the large default value, on most modern systems LMDB will only use the d
 defines an upper limit for the database size. For more information about LMDB’s map size, refer to the
 [LMDB documentation](http://www.lmdb.tech/doc/group__mdb.html#gaa2506ec8dab3d969b0e609cd82e619e5).
 
+### Running on low-memory hardware (BadgerDB)
+
+Haven opens five BadgerDB instances (private, chat, outbox, inbox and blossom). BadgerDB's defaults are sized for a
+dedicated database server (64 MB memtables, a 256 MB block cache, 4 compactors, ...) and are applied to each of the five,
+so an idle Haven can reserve far more memory than its few-megabyte databases need.
+
+Set `BADGER_PROFILE=low-memory` to use small memtables and caches (8 MB x 2 memtables, 16 MB block cache, 2 compactors,
+64 MB value log files). The default profile keeps BadgerDB's defaults, so nothing changes unless you opt in.
+Individual values can be overridden with `BADGER_MEMTABLE_SIZE_MB`, `BADGER_NUM_MEMTABLES`, `BADGER_BLOCK_CACHE_MB`,
+`BADGER_INDEX_CACHE_MB`, `BADGER_NUM_COMPACTORS`, `BADGER_VALUE_LOG_FILE_SIZE_MB` and `BADGER_NUM_LEVEL_ZERO_TABLES`
+(all per database; `0` keeps the profile or BadgerDB default).
+
+For a hard ceiling on the Go heap you can additionally set `GOMEMLIMIT` (for example `GOMEMLIMIT=96MiB`).
+
 ### Migrating from databases created in older versions of Haven
 
 Haven uses [Khatru's event store](https://github.com/fiatjaf/eventstore) to store notes. The way events are stored evolves 

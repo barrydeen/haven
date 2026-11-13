@@ -28,6 +28,7 @@ type Config struct {
 	OwnerPubKey                          string              `json:"owner_pubkey"`
 	DBEngine                             string              `json:"db_engine"`
 	LmdbMapSize                          int64               `json:"lmdb_map_size"`
+	Badger                               BadgerTuning        `json:"badger"`
 	BlossomPath                          string              `json:"blossom_path"`
 	RelayURL                             string              `json:"relay_url"`
 	RelayPort                            int                 `json:"relay_port"`
@@ -90,6 +91,7 @@ func loadConfig() Config {
 		OwnerPubKey:                          nPubToPubkey("OWNER_NPUB", getEnv("OWNER_NPUB")),
 		DBEngine:                             getEnvString("DB_ENGINE", "lmdb"),
 		LmdbMapSize:                          getEnvInt64("LMDB_MAPSIZE", 0),
+		Badger:                               loadBadgerTuning(),
 		BlossomPath:                          getEnvString("BLOSSOM_PATH", "blossom"),
 		RelayURL:                             getEnv("RELAY_URL"),
 		RelayPort:                            getEnvInt("RELAY_PORT", 3355),
