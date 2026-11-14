@@ -314,12 +314,12 @@ func (s *metricsStore) persist() {
 		return
 	}
 	if _, err := f.Write(raw); err != nil {
-		f.Close()
+		_ = f.Close()
 		slog.Error("🚫 error writing the analytics file", "path", tmp, "error", err)
 		return
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
+		_ = f.Close()
 		slog.Error("🚫 error syncing the analytics file", "path", tmp, "error", err)
 		return
 	}
