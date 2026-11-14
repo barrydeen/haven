@@ -132,9 +132,7 @@ func newDBBackend(path string) DBBackend {
 	case "lmdb":
 		return newLMDBBackend(path)
 	case "badger":
-		return &badger.BadgerBackend{
-			Path: path,
-		}
+		return newBadgerBackend(path)
 	default:
 		return newLMDBBackend(path)
 	}
@@ -215,6 +213,17 @@ func backendCountsSafely(db DBBackend) bool {
 	default:
 		// an engine we do not know: walking is slower but it terminates
 		return false
+	}
+}
+
+func newBadgerBackend(path string) *badger.BadgerBackend {
+	modifier, err := config.Badger.badgerOptionsModifier()
+	if err != nil {
+		panic(err)
+	}
+	return &badger.BadgerBackend{
+		Path:                  path,
+		BadgerOptionsModifier: modifier,
 	}
 }
 
