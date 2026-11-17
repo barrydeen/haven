@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 // withTestRelay swaps the package's dbs map for one holding a single temp store
@@ -15,9 +15,9 @@ import (
 // eventCounts for a total, and that walks every database in dbs — including the
 // four real ones, which a test never calls Init on. The outbox name is used
 // because resolveProfiles falls back to outboxDB by name for any other relay.
-func withTestRelay(t *testing.T, maxLimit int) DBBackend {
+func withTestRelay(t *testing.T) DBBackend {
 	t.Helper()
-	db := newTestDB(t, maxLimit)
+	db := newTestDB(t)
 	original := dbs
 	dbs = map[string]DBBackend{relayOutbox: db}
 	eventCounts.invalidate()
@@ -30,7 +30,7 @@ func withTestRelay(t *testing.T, maxLimit int) DBBackend {
 
 func seedNotes(t *testing.T, db DBBackend, n int, base nostr.Timestamp) []string {
 	t.Helper()
-	sk := nostr.GeneratePrivateKey()
+	sk := nostr.Generate()
 	ids := make([]string, 0, n)
 	for i := range n {
 		evt := &nostr.Event{
@@ -45,7 +45,7 @@ func seedNotes(t *testing.T, db DBBackend, n int, base nostr.Timestamp) []string
 		if err := db.SaveEvent(context.Background(), evt); err != nil {
 			t.Fatalf("save: %v", err)
 		}
-		ids = append(ids, evt.ID)
+		ids = append(ids, evt.ID.Hex())
 	}
 	return ids
 }
@@ -54,7 +54,7 @@ func seedNotes(t *testing.T, db DBBackend, n int, base nostr.Timestamp) []string
 // way the browser does and checks the two failures that matter: an event
 // returned twice, and an event never returned at all.
 func TestListEventsPagesWithoutLosingOrRepeating(t *testing.T) {
-	db := withTestRelay(t, 10)
+	db := withTestRelay(t)
 	want := seedNotes(t, db, 47, 1700000000)
 
 	seen := map[string]int{}
@@ -95,7 +95,7 @@ func TestListEventsPagesWithoutLosingOrRepeating(t *testing.T) {
 // TestListEventsReportsTotalAndOrder: newest first is the feed order, and total
 // is what tells the owner how much they have not seen.
 func TestListEventsReportsTotalAndOrder(t *testing.T) {
-	db := withTestRelay(t, 100)
+	db := withTestRelay(t)
 	seedNotes(t, db, 25, 1700000000)
 
 	res, err := listEvents(context.Background(), relayOutbox, eventListOptions{Limit: 5})
@@ -128,9 +128,9 @@ func TestListEventsReportsTotalAndOrder(t *testing.T) {
 // report how far it looked, because a bounded search that stops quietly is a
 // lie. It must also never set Filter.Search, which would return nothing at all.
 func TestListEventsSearchIsHonest(t *testing.T) {
-	db := withTestRelay(t, 50)
+	db := withTestRelay(t)
 
-	sk := nostr.GeneratePrivateKey()
+	sk := nostr.Generate()
 	for i, content := range []string{"find me please", "something else", "FIND ME TOO", "nope"} {
 		evt := &nostr.Event{
 			CreatedAt: nostr.Timestamp(1700000000 + i),
@@ -169,9 +169,9 @@ func TestListEventsSearchIsHonest(t *testing.T) {
 // TestListEventsFiltersByKind proves the server side filter reaches the query
 // rather than being dropped.
 func TestListEventsFiltersByKind(t *testing.T) {
-	db := withTestRelay(t, 50)
-	sk := nostr.GeneratePrivateKey()
-	for i, kind := range []int{1, 7, 1, 30023, 7} {
+	db := withTestRelay(t)
+	sk := nostr.Generate()
+	for i, kind := range []nostr.Kind{1, 7, 1, 30023, 7} {
 		evt := &nostr.Event{
 			CreatedAt: nostr.Timestamp(1700000000 + i),
 			Kind:      kind,
@@ -212,8 +212,8 @@ func TestListEventsFiltersByKind(t *testing.T) {
 // code point, which encoding/json turns into a replacement character in the
 // middle of somebody's note.
 func TestListEventsTruncatesContentOnARuneBoundary(t *testing.T) {
-	db := withTestRelay(t, 50)
-	sk := nostr.GeneratePrivateKey()
+	db := withTestRelay(t)
+	sk := nostr.Generate()
 	evt := &nostr.Event{
 		CreatedAt: 1700000000,
 		Kind:      nostr.KindTextNote,
@@ -256,7 +256,7 @@ func utf8ValidString(s string) bool {
 // TestDeleteEventsRemovesAndReportsHonestly covers the decision the user made:
 // delete only, no ban, and the answer has to say the event can come back.
 func TestDeleteEventsRemovesAndReportsHonestly(t *testing.T) {
-	db := withTestRelay(t, 50)
+	db := withTestRelay(t)
 	ids := seedNotes(t, db, 3, 1700000000)
 
 	missing := "0000000000000000000000000000000000000000000000000000000000000000"
@@ -295,17 +295,17 @@ func TestDeleteEventsRemovesAndReportsHonestly(t *testing.T) {
 // TestGetEventReturnsTheWholeEvent: the drawer's raw JSON view is only honest if
 // it is the real event, signature and all.
 func TestGetEventReturnsTheWholeEvent(t *testing.T) {
-	db := withTestRelay(t, 50)
+	db := withTestRelay(t)
 	ids := seedNotes(t, db, 1, 1700000000)
 
 	detail, err := getEvent(context.Background(), relayOutbox, ids[0])
 	if err != nil {
 		t.Fatalf("getEvent: %v", err)
 	}
-	if detail.Event == nil || detail.Event.ID != ids[0] {
+	if detail.Event == nil || detail.Event.ID.Hex() != ids[0] {
 		t.Fatal("getEvent returned the wrong event")
 	}
-	if detail.Event.Sig == "" {
+	if detail.Event.Sig == [64]byte{} {
 		t.Error("the event came back without its signature")
 	}
 	if detail.Class != "regular" || detail.Permanent {

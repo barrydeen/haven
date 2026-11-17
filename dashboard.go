@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 //
@@ -102,7 +102,7 @@ func scanCorpus(ctx context.Context, name string, db DBBackend) *corpusStats {
 		Daily:   []dayCount{},
 	}
 
-	kinds := map[int]int64{}
+	kinds := map[nostr.Kind]int64{}
 	authors := map[string]*authorCount{}
 	daily := map[int64]*dayCount{}
 
@@ -123,11 +123,11 @@ func scanCorpus(ctx context.Context, name string, db DBBackend) *corpusStats {
 			stats.KindsOther++
 		}
 
-		if a, ok := authors[evt.PubKey]; ok {
+		if a, ok := authors[evt.PubKey.Hex()]; ok {
 			a.Events++
 			a.Bytes += size
 		} else if len(authors) < authorCap {
-			authors[evt.PubKey] = &authorCount{PubKey: evt.PubKey, Events: 1, Bytes: size}
+			authors[evt.PubKey.Hex()] = &authorCount{PubKey: evt.PubKey.Hex(), Events: 1, Bytes: size}
 		} else {
 			stats.AuthorsTruncated = true
 		}
@@ -163,7 +163,7 @@ func scanCorpus(ctx context.Context, name string, db DBBackend) *corpusStats {
 	}
 
 	for kind, n := range kinds {
-		stats.Kinds[itoa(kind)] = n
+		stats.Kinds[itoa(int(kind))] = n
 	}
 
 	stats.AuthorsTotal = int64(len(authors))

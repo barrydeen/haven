@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fiatjaf/khatru"
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/khatru"
 )
 
 // signedManagementRequest builds the exact request the admin page sends: a NIP-86
 // body, and a NIP-98 event over it in the Authorization header.
-func signedManagementRequest(t *testing.T, sk, serviceURL, path, method string, params []any) *http.Request {
+func signedManagementRequest(t *testing.T, sk nostr.SecretKey, serviceURL, path, method string, params []any) *http.Request {
 	t.Helper()
 
 	body, err := json.Marshal(map[string]any{"method": method, "params": params})
@@ -55,19 +55,16 @@ func signedManagementRequest(t *testing.T, sk, serviceURL, path, method string, 
 // covered elsewhere; this is the part that only breaks when they are wired
 // together.
 func TestManagementListEventsOverHTTP(t *testing.T) {
-	db := withTestRelay(t, 50)
+	db := withTestRelay(t)
 	seedNotes(t, db, 3, 1700000000)
 
-	sk := nostr.GeneratePrivateKey()
-	pk, err := nostr.GetPublicKey(sk)
-	if err != nil {
-		t.Fatalf("pubkey: %v", err)
-	}
+	sk := nostr.Generate()
+	pk := nostr.GetPublicKey(sk)
 
 	// the config is a package level value, so it is borrowed and put back
 	originalOwner := config.OwnerPubKey
 	originalEnabled := config.ManagementAPIEnabled
-	config.OwnerPubKey = pk
+	config.OwnerPubKey = pk.Hex()
 	config.ManagementAPIEnabled = true
 	t.Cleanup(func() {
 		config.OwnerPubKey = originalOwner
@@ -182,11 +179,11 @@ func TestManagementListEventsOverHTTP(t *testing.T) {
 // TestManagementRejectsAStranger: the whole console is owner-only, and that check
 // is the only thing standing between a stranger and a delete button.
 func TestManagementRejectsAStranger(t *testing.T) {
-	withTestRelay(t, 50)
+	withTestRelay(t)
 
-	owner := nostr.GeneratePrivateKey()
-	ownerPk, _ := nostr.GetPublicKey(owner)
-	stranger := nostr.GeneratePrivateKey()
+	owner := nostr.Generate()
+	ownerPk := nostr.GetPublicKey(owner).Hex()
+	stranger := nostr.Generate()
 
 	original := config.OwnerPubKey
 	config.OwnerPubKey = ownerPk

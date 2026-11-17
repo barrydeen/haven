@@ -7,14 +7,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 // TestBuildDashboardShapeAndHonesty checks the two things the page depends on:
 // that all three ranges arrive together (so switching between them costs no
 // signature), and that a bucket with no record is null rather than zero.
 func TestBuildDashboardShapeAndHonesty(t *testing.T) {
-	db := withTestRelay(t, 50)
+	db := withTestRelay(t)
 	seedNotes(t, db, 4, 1700000000)
 
 	originalEnabled := config.AnalyticsEnabled
@@ -88,10 +88,10 @@ func TestBuildDashboardShapeAndHonesty(t *testing.T) {
 // TestScanCorpusSummarises covers the aggregate pass the dashboard's kind mix and
 // top authors come from.
 func TestScanCorpusSummarises(t *testing.T) {
-	db := withTestRelay(t, 50)
+	db := withTestRelay(t)
 
-	sk := nostr.GeneratePrivateKey()
-	for i, kind := range []int{1, 1, 7, 1, 7, 0} {
+	sk := nostr.Generate()
+	for i, kind := range []nostr.Kind{1, 1, 7, 1, 7, 0} {
 		evt := &nostr.Event{
 			CreatedAt: nostr.Timestamp(1700000000 + i*3600),
 			Kind:      kind,

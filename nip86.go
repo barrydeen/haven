@@ -14,9 +14,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/fiatjaf/khatru"
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip86"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/khatru"
+	"fiatjaf.com/nostr/nip86"
 )
 
 // contentTypeNIP86 marks a relay management request. khatru would answer these
@@ -456,7 +456,7 @@ func paramPubKey(params []any, i int) (string, error) {
 		return "", err
 	}
 	s = strings.ToLower(strings.TrimSpace(s))
-	if !nostr.IsValidPublicKey(s) {
+	if !nostr.IsValid32ByteHex(s) {
 		return "", errors.New("not a valid 32 byte hex public key")
 	}
 	return s, nil

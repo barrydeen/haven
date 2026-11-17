@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip86"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip86"
 )
 
 // Where a ban or an allow came from. haven has more than one source and only
@@ -239,7 +239,14 @@ func listAllowedEvents(relay string) []nip86.IDReason {
 func idReasons(m map[string]string) []nip86.IDReason {
 	entries := make([]nip86.IDReason, 0, len(m))
 	for _, id := range slices.Sorted(maps.Keys(m)) {
-		entries = append(entries, nip86.IDReason{ID: id, Reason: m[id]})
+		eid, err := nostr.IDFromHex(id)
+		if err != nil {
+			// keys come from paramEventID, so this only happens if persisted
+			// state was hand-edited; skipping beats corrupting the response
+			slog.Warn("⚠️ skipping an event id that is not valid hex", "id", id)
+			continue
+		}
+		entries = append(entries, nip86.IDReason{ID: eid, Reason: m[id]})
 	}
 	return entries
 }

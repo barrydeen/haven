@@ -11,16 +11,16 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fiatjaf/khatru"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/khatru"
 	"github.com/joho/godotenv"
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/spf13/afero"
 
 	"github.com/barrydeen/haven/pkg/wot"
 )
 
 var (
-	pool   *nostr.SimplePool
+	pool   *nostr.Pool
 	config Config
 	fs     afero.Fs
 )
@@ -53,13 +53,13 @@ func main() {
 	// same view of who is banned and allowed as the relay does
 	loadManagementStore()
 
-	pool = nostr.NewSimplePool(mainCtx,
-		nostr.WithPenaltyBox(),
-		nostr.WithRelayOptions(
-			nostr.WithRequestHeader{
-				"User-Agent": []string{config.UserAgent},
-			}),
-	)
+	pool = nostr.NewPool()
+	pool.RelayOptions = nostr.RelayOptions{
+		RequestHeader: http.Header{
+			"User-Agent": []string{config.UserAgent},
+		},
+	}
+	pool.StartPenaltyBox()
 
 	if len(os.Args) > 1 {
 		switch os.Args[1] {

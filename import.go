@@ -9,8 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/fiatjaf/eventstore"
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 
 	"github.com/barrydeen/haven/pkg/wot"
 )
@@ -71,7 +70,7 @@ func runImport(ctx context.Context) {
 func importOwnerNotes(ctx context.Context) {
 	ownerImportedNotes := 0
 	nFailedImportNotes := 0
-	wdb := eventstore.RelayWrapper{Store: outboxDB}
+	wdb := DBBackend(outboxDB)
 
 	startTime, err := time.Parse(layout, config.ImportStartDate)
 	if err != nil {
@@ -81,13 +80,20 @@ func importOwnerNotes(ctx context.Context) {
 	endTime := startTime.Add(240 * time.Hour)
 
 	for {
-		startTimestamp := nostr.Timestamp(startTime.Unix())
-		endTimestamp := nostr.Timestamp(endTime.Unix())
+		whitelistedKeys := make([]nostr.PubKey, 0, len(whitelistedPubKeys()))
+		for _, hexKey := range whitelistedPubKeys() {
+			parsed, err := nostr.PubKeyFromHex(hexKey)
+			if err != nil {
+				log.Println("🚫 skipping invalid whitelisted pubkey during import:", hexKey, err)
+				continue
+			}
+			whitelistedKeys = append(whitelistedKeys, parsed)
+		}
 
 		filter := nostr.Filter{
-			Authors: whitelistedPubKeys(),
-			Since:   &startTimestamp,
-			Until:   &endTimestamp,
+			Authors: whitelistedKeys,
+			Since:   nostr.Timestamp(startTime.Unix()),
+			Until:   nostr.Timestamp(endTime.Unix()),
 		}
 
 		done := make(chan int, 1)
@@ -98,28 +104,28 @@ func importOwnerNotes(ctx context.Context) {
 			defer cancel()
 			batchImportedNotes := 0
 
-			events := pool.FetchMany(ctx, config.ImportSeedRelays, filter)
+			events := pool.FetchMany(ctx, config.ImportSeedRelays, filter, nostr.SubscriptionOptions{})
 			for ev := range events {
 				if ctx.Err() != nil {
 					break // Stop the loop on timeout
 				}
-				if _, ok := config.BlacklistedPubKeys[ev.PubKey]; ok {
+				if _, ok := config.BlacklistedPubKeys[ev.PubKey.Hex()]; ok {
 					slog.Debug("🚫 skipping event from blacklisted pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 					continue
 				}
-				if isBanned(ev.PubKey) {
+				if isBanned(ev.PubKey.Hex()) {
 					slog.Debug("🚫 skipping event from banned pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 					continue
 				}
-				if isBannedEvent(relayOutbox, ev.ID) {
+				if isBannedEvent(relayOutbox, ev.ID.Hex()) {
 					slog.Debug("🚫 skipping banned event", "id", ev.ID)
 					continue
 				}
-				if isDeleted(ctx, outboxDB, ev.Event) {
+				if isDeleted(ctx, outboxDB, &ev.Event) {
 					slog.Debug("🚫 skipping deleted event", "id", ev.ID)
 					continue
 				}
-				if err := wdb.Publish(ctx, *ev.Event); err != nil {
+				if err := publishToDB(ctx, wdb, ev.Event); err != nil {
 					log.Println("🚫  error importing note", ev.ID, ":", err)
 					nFailedImportNotes++
 				}
@@ -163,8 +169,8 @@ func importTaggedNotes(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	wdbInbox := eventstore.RelayWrapper{Store: inboxDB}
-	wdbChat := eventstore.RelayWrapper{Store: chatDB}
+	wdbInbox := DBBackend(inboxDB)
+	wdbChat := DBBackend(chatDB)
 	filter := nostr.Filter{
 		Tags: nostr.TagMap{
 			"p": whitelistedPubKeys(),
@@ -174,23 +180,23 @@ func importTaggedNotes(ctx context.Context) {
 	log.Println("📦 importing inbox notes, please wait up to", timeout)
 
 	go func() {
-		events := pool.FetchMany(ctx, config.ImportSeedRelays, filter)
+		events := pool.FetchMany(ctx, config.ImportSeedRelays, filter, nostr.SubscriptionOptions{})
 		for ev := range events {
 			if ctx.Err() != nil {
 				break // Stop the loop on timeout
 			}
 
-			if _, ok := config.BlacklistedPubKeys[ev.PubKey]; ok {
+			if _, ok := config.BlacklistedPubKeys[ev.PubKey.Hex()]; ok {
 				slog.Debug("🚫 skipping tagged event from blacklisted pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 				continue
 			}
 
-			if isBanned(ev.PubKey) {
+			if isBanned(ev.PubKey.Hex()) {
 				slog.Debug("🚫 skipping tagged event from banned pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 				continue
 			}
 
-			if !wot.GetInstance().Has(ctx, ev.PubKey) && ev.Kind != nostr.KindGiftWrap {
+			if !wot.GetInstance().Has(ctx, ev.PubKey.Hex()) && ev.Kind != nostr.KindGiftWrap {
 				continue
 			}
 			for tag := range ev.Tags.FindAll("p") {
@@ -206,15 +212,15 @@ func importTaggedNotes(ctx context.Context) {
 						dbToCheck = chatDB
 						relayToCheck = relayChat
 					}
-					if isBannedEvent(relayToCheck, ev.ID) {
+					if isBannedEvent(relayToCheck, ev.ID.Hex()) {
 						slog.Debug("🚫 skipping banned tagged event", "id", ev.ID)
 						break
 					}
-					if isDeleted(ctx, dbToCheck, ev.Event) {
+					if isDeleted(ctx, dbToCheck, &ev.Event) {
 						slog.Debug("🚫 skipping deleted tagged event", "id", ev.ID)
 						break
 					}
-					if err := dbToWrite.Publish(ctx, *ev.Event); err != nil {
+					if err := publishToDB(ctx, dbToWrite, ev.Event); err != nil {
 						log.Println("🚫 error importing tagged note", ev.ID, ":", err)
 					}
 					taggedImportedNotes++
@@ -235,28 +241,28 @@ func importTaggedNotes(ctx context.Context) {
 }
 
 func subscribeInboxAndChat(ctx context.Context) {
-	wdbInbox := eventstore.RelayWrapper{Store: inboxDB}
-	wdbChat := eventstore.RelayWrapper{Store: chatDB}
+	wdbInbox := DBBackend(inboxDB)
+	wdbChat := DBBackend(chatDB)
 	startTime := nostr.Timestamp(time.Now().Add(-time.Minute * 5).Unix())
 	filter := nostr.Filter{
 		Tags: nostr.TagMap{
 			"p": whitelistedPubKeys(),
 		},
-		Since: &startTime,
+		Since: startTime,
 	}
 
 	log.Println("📢 subscribing to inbox")
 
-	for ev := range pool.SubscribeMany(ctx, config.ImportSeedRelays, filter) {
-		if _, ok := config.BlacklistedPubKeys[ev.PubKey]; ok {
+	for ev := range pool.SubscribeMany(ctx, config.ImportSeedRelays, filter, nostr.SubscriptionOptions{}) {
+		if _, ok := config.BlacklistedPubKeys[ev.PubKey.Hex()]; ok {
 			slog.Debug("🚫discarding imported note from blacklisted pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 			continue
 		}
-		if isBanned(ev.PubKey) {
+		if isBanned(ev.PubKey.Hex()) {
 			slog.Debug("🚫 discarding imported note from banned pubkey", "pubkey", ev.PubKey, "id", ev.ID)
 			continue
 		}
-		if !wot.GetInstance().Has(ctx, ev.PubKey) && ev.Kind != nostr.KindGiftWrap {
+		if !wot.GetInstance().Has(ctx, ev.PubKey.Hex()) && ev.Kind != nostr.KindGiftWrap {
 			continue
 		}
 		for tag := range ev.Tags.FindAll("p") {
@@ -273,24 +279,24 @@ func subscribeInboxAndChat(ctx context.Context) {
 					relayToCheck = relayChat
 				}
 
-				if isBannedEvent(relayToCheck, ev.ID) {
+				if isBannedEvent(relayToCheck, ev.ID.Hex()) {
 					slog.Debug("🚫 discarding banned event", "id", ev.ID)
 					break
 				}
 
 				slog.Debug("ℹ️ importing event", "kind", ev.Kind, "id", ev.ID, "relay", ev.Relay.URL)
 
-				if isDuplicate(ctx, dbToPublish, ev.Event) {
+				if isDuplicate(ctx, dbToPublish, &ev.Event) {
 					slog.Debug("ℹ️ skipping duplicate event", "id", ev.ID)
 					break // Avoid re-importing duplicates
 				}
 
-				if isDeleted(ctx, dbToCheck, ev.Event) {
+				if isDeleted(ctx, dbToCheck, &ev.Event) {
 					slog.Debug("🚫 skipping deleted event", "id", ev.ID)
 					break // Deleted events must not come back
 				}
 
-				if err := dbToPublish.Publish(ctx, *ev.Event); err != nil {
+				if err := publishToDB(ctx, dbToPublish, ev.Event); err != nil {
 					log.Println("🚫 error importing tagged note", ev.ID, ":", "from relay", ev.Relay.URL, ":", err)
 					break
 				}
@@ -318,18 +324,22 @@ func subscribeInboxAndChat(ctx context.Context) {
 	}
 }
 
-func isDuplicate(ctx context.Context, db eventstore.RelayWrapper, event *nostr.Event) bool {
+func isDuplicate(ctx context.Context, db DBBackend, event *nostr.Event) bool {
 	filter := nostr.Filter{
-		IDs:   []string{event.ID},
-		Since: &event.CreatedAt,
+		IDs:   []nostr.ID{event.ID},
+		Since: event.CreatedAt,
 		Limit: 1,
 	}
 
-	events, err := db.QuerySync(ctx, filter)
-	if err != nil {
+	found := false
+	db.QueryEventsIter(ctx, filter, 1)(func(nostr.Event) bool {
+		found = true
+		return false
+	})
+	if err := ctx.Err(); err != nil {
 		log.Println("🚫 error querying for event", event.ID, ":", err)
 		return false
 	}
 
-	return len(events) > 0
+	return found
 }

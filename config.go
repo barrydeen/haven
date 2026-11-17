@@ -11,7 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr/nip19"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip19"
 )
 
 type S3Config struct {
@@ -291,11 +292,12 @@ func nPubToPubkey(label, nPub string) string {
 	if prefix != "npub" {
 		log.Fatalf("invalid npub for %s: expected an npub, got a %q", label, prefix)
 	}
-	pubkey, ok := v.(string)
+	// the successor nip19 hands the npub back as a nostr.PubKey, not a string
+	pubkey, ok := v.(nostr.PubKey)
 	if !ok {
 		log.Fatalf("invalid npub for %s: %q did not decode to a public key", label, nPub)
 	}
-	return pubkey
+	return pubkey.Hex()
 }
 
 var art = `

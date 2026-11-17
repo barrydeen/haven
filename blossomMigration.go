@@ -4,8 +4,9 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/fiatjaf/khatru/blossom"
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/khatru/blossom"
+	nipb7blossom "fiatjaf.com/nostr/nipb7/blossom"
 )
 
 // migrateBlossomMetadata moves the owner's blob descriptors out of the outbox
@@ -18,14 +19,19 @@ import (
 // migrate at most a few hundred descriptors per boot and report success.
 func migrateBlossomMetadata(ctx context.Context, bl *blossom.BlossomServer) {
 	ownerPubkey := nPubToPubkey("OWNER_NPUB", config.OwnerNpub)
+	ownerKey, err := nostr.PubKeyFromHex(ownerPubkey)
+	if err != nil {
+		slog.Error("🚫 owner pubkey is not valid hex; blob metadata migration is skipped", "error", err)
+		return
+	}
 
 	// everything is collected before anything is written or deleted: the walk
 	// below holds a cursor into the outbox database, and deleting from
 	// underneath it would move the ground it is standing on
 	var events []*nostr.Event
 	if _, _, err := eachEvent(ctx, outboxDB, nostr.Filter{
-		Authors: []string{ownerPubkey},
-		Kinds:   []int{blobIndexKind},
+		Authors: []nostr.PubKey{ownerKey},
+		Kinds:   []nostr.Kind{blobIndexKind},
 	}, maxAggregateScan, func(evt *nostr.Event) bool {
 		events = append(events, evt)
 		return true
@@ -51,7 +57,7 @@ func migrateBlossomMetadata(ctx context.Context, bl *blossom.BlossomServer) {
 			continue
 		}
 
-		blob := blossom.BlobDescriptor{
+		blob := nipb7blossom.BlobDescriptor{
 			SHA256:   parsed.SHA256,
 			Size:     parsed.Size,
 			Type:     parsed.Type,
@@ -64,7 +70,7 @@ func migrateBlossomMetadata(ctx context.Context, bl *blossom.BlossomServer) {
 
 		slog.Debug("Moving BlobDescriptor", "sha256", blob.SHA256, "type", blob.Type, "size", blob.Size)
 
-		if err := bl.Store.Keep(ctx, blob, ownerPubkey); err != nil {
+		if err := bl.Store.Keep(ctx, blob, ownerKey); err != nil {
 			slog.Error("🚫 Failed to store blob in Blossom DB", "sha256", blob.SHA256, "error", err)
 			continue
 		}

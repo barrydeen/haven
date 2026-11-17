@@ -8,7 +8,7 @@ import (
 	"slices"
 	"sync/atomic"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 // KindBanList is the replaceable NIP-51 list the owner publishes to their outbox
@@ -34,7 +34,7 @@ type banListState struct {
 // isn't the owner's ban list or is older than what is already cached. It reports
 // whether the cache changed.
 func (bl *banList) apply(event *nostr.Event) bool {
-	if event.Kind != KindBanList || event.PubKey != config.OwnerPubKey {
+	if event.Kind != KindBanList || event.PubKey.Hex() != config.OwnerPubKey {
 		return false
 	}
 
@@ -89,9 +89,15 @@ func (bl *banList) size() int {
 // loadBanList caches the latest ban list the owner has published to their outbox
 // relay. It must run before the relays start accepting events.
 func loadBanList(ctx context.Context) {
+	ownerKey, err := nostr.PubKeyFromHex(config.OwnerPubKey)
+	if err != nil {
+		slog.Error("🚫 owner pubkey is not valid hex; the ban list is not loaded", "error", err)
+		return
+	}
+
 	events, err := outboxDB.QueryEvents(ctx, nostr.Filter{
-		Kinds:   []int{KindBanList},
-		Authors: []string{config.OwnerPubKey},
+		Kinds:   []nostr.Kind{KindBanList},
+		Authors: []nostr.PubKey{ownerKey},
 		Limit:   1,
 	})
 	if err != nil {
@@ -107,8 +113,8 @@ func loadBanList(ctx context.Context) {
 }
 
 // refreshBanList keeps the cache up to date as the owner edits their list.
-func refreshBanList(_ context.Context, event *nostr.Event) {
-	if bannedPubKeys.apply(event) {
+func refreshBanList(_ context.Context, event nostr.Event) {
+	if bannedPubKeys.apply(&event) {
 		log.Println("🔨 Ban list updated, number of banned pubkeys:", bannedPubKeys.size())
 	}
 }

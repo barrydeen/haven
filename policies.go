@@ -7,25 +7,25 @@ import (
 	"net/http"
 	"slices"
 
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/khatru"
+	"fiatjaf.com/nostr/nip11"
 	"github.com/barrydeen/haven/pkg/wot"
-	"github.com/fiatjaf/khatru"
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip11"
 )
 
 func MustBeWhitelistedToQuery(ctx context.Context, _ nostr.Filter) (bool, string) {
-	authenticatedUser := khatru.GetAuthed(ctx)
-	if !isWhitelisted(authenticatedUser) {
-		slog.Debug("🚫 query rejected: user is not whitelisted", "user", authenticatedUser)
+	authenticatedUser, _ := khatru.GetAuthed(ctx)
+	if !isWhitelisted(authenticatedUser.Hex()) {
+		slog.Debug("🚫 query rejected: user is not whitelisted", "user", authenticatedUser.Hex())
 		return true, "restricted: you must be whitelisted to query this relay"
 	}
 	return false, ""
 }
 
 func MustBeInWotToQuery(ctx context.Context, _ nostr.Filter) (bool, string) {
-	authenticatedUser := khatru.GetAuthed(ctx)
-	if !wot.GetInstance().Has(ctx, authenticatedUser) {
-		slog.Debug("🚫 query rejected: user is not in the web of trust", "user", authenticatedUser)
+	authenticatedUser, _ := khatru.GetAuthed(ctx)
+	if !wot.GetInstance().Has(ctx, authenticatedUser.Hex()) {
+		slog.Debug("🚫 query rejected: user is not in the web of trust", "user", authenticatedUser.Hex())
 		return true, "restricted: you must be in the web of trust to query this relay"
 	}
 	return false, ""
@@ -33,15 +33,15 @@ func MustBeInWotToQuery(ctx context.Context, _ nostr.Filter) (bool, string) {
 
 func MustBeWhitelistedToPost(ctx context.Context, event *nostr.Event) (bool, string) {
 	// Event from a whitelisted pubkey can always be posted, even if the user is not authenticated
-	if isWhitelisted(event.PubKey) {
+	if isWhitelisted(event.PubKey.Hex()) {
 		return false, ""
 	}
-	authenticatedUser := khatru.GetAuthed(ctx)
-	if authenticatedUser == "" {
+	authenticatedUser, ok := khatru.GetAuthed(ctx)
+	if !ok {
 		return true, "auth-required: you must be authenticated to post to this relay"
 	}
-	if !isWhitelisted(authenticatedUser) {
-		slog.Debug("🚫 event rejected: user is not whitelisted", "event", event.ID, "pubkey", authenticatedUser)
+	if !isWhitelisted(authenticatedUser.Hex()) {
+		slog.Debug("🚫 event rejected: user is not whitelisted", "event", event.ID, "pubkey", authenticatedUser.Hex())
 		return true, "restricted: you must be whitelisted to post to this relay"
 	}
 	return false, ""
@@ -49,29 +49,29 @@ func MustBeWhitelistedToPost(ctx context.Context, event *nostr.Event) (bool, str
 
 func MustBeInWotToPost(ctx context.Context, event *nostr.Event) (bool, string) {
 	// Event from a pubkey in the WoT can always be posted, even if the user is not authenticated
-	if wot.GetInstance().Has(ctx, event.PubKey) {
+	if wot.GetInstance().Has(ctx, event.PubKey.Hex()) {
 		return false, ""
 	}
-	authenticatedUser := khatru.GetAuthed(ctx)
-	if authenticatedUser == "" {
+	authenticatedUser, ok := khatru.GetAuthed(ctx)
+	if !ok {
 		return true, "auth-required: you must be authenticated to post to this relay"
 	}
-	if !wot.GetInstance().Has(ctx, authenticatedUser) {
-		slog.Debug("🚫 event rejected: user is not in web of trust", "event", event.ID, "pubkey", authenticatedUser)
+	if !wot.GetInstance().Has(ctx, authenticatedUser.Hex()) {
+		slog.Debug("🚫 event rejected: user is not in web of trust", "event", event.ID, "pubkey", authenticatedUser.Hex())
 		return true, "you must be in the web of trust to post to this relay"
 	}
 	return false, ""
 }
 
 func MustNotBeBannedToPost(ctx context.Context, event *nostr.Event) (bool, string) {
-	if isBanned(event.PubKey) {
-		slog.Debug("🚫 event rejected: event author is banned", "event", event.ID, "pubkey", event.PubKey)
+	if isBanned(event.PubKey.Hex()) {
+		slog.Debug("🚫 event rejected: event author is banned", "event", event.ID, "pubkey", event.PubKey.Hex())
 		return true, "you are banned from this relay"
 	}
 	// gift wraps and the like are signed with throwaway keys, so check who is on
 	// the other end of the connection too, when we know
-	if authenticatedUser := khatru.GetAuthed(ctx); authenticatedUser != "" && isBanned(authenticatedUser) {
-		slog.Debug("🚫 event rejected: authenticated user is banned", "event", event.ID, "pubkey", authenticatedUser)
+	if authenticatedUser, ok := khatru.GetAuthed(ctx); ok && isBanned(authenticatedUser.Hex()) {
+		slog.Debug("🚫 event rejected: authenticated user is banned", "event", event.ID, "pubkey", authenticatedUser.Hex())
 		return true, "you are banned from this relay"
 	}
 	return false, ""
@@ -79,8 +79,8 @@ func MustNotBeBannedToPost(ctx context.Context, event *nostr.Event) (bool, strin
 
 func MustNotBeBlacklistedToPost(ctx context.Context, event *nostr.Event) (bool, string) {
 	// Events from a blacklisted pubkey ARE always rejected
-	if _, ok := config.BlacklistedPubKeys[event.PubKey]; ok {
-		slog.Debug("🚫 event rejected: event author is blacklisted", "event", event.ID, "pubkey", event.PubKey)
+	if _, ok := config.BlacklistedPubKeys[event.PubKey.Hex()]; ok {
+		slog.Debug("🚫 event rejected: event author is blacklisted", "event", event.ID, "pubkey", event.PubKey.Hex())
 		return true, "you are blacklisted from this relay"
 	}
 	// The owner's delete requests carry the owner's signature, so there is nothing
@@ -89,12 +89,12 @@ func MustNotBeBlacklistedToPost(ctx context.Context, event *nostr.Event) (bool, 
 		return false, ""
 	}
 	// Still need auth due to GiftWrap and other events with random pubkeys
-	authenticatedUser := khatru.GetAuthed(ctx)
-	if authenticatedUser == "" {
+	authenticatedUser, ok := khatru.GetAuthed(ctx)
+	if !ok {
 		return true, "auth-required: you must be authenticated to post to this relay"
 	}
-	if _, ok := config.BlacklistedPubKeys[authenticatedUser]; ok {
-		slog.Debug("🚫 event rejected: authenticated user is blacklisted", "event", event.ID, "pubkey", authenticatedUser)
+	if _, ok := config.BlacklistedPubKeys[authenticatedUser.Hex()]; ok {
+		slog.Debug("🚫 event rejected: authenticated user is blacklisted", "event", event.ID, "pubkey", authenticatedUser.Hex())
 		return true, "you are blacklisted from this relay"
 	}
 	return false, ""
@@ -104,31 +104,35 @@ func MustNotBeBlacklistedToPost(ctx context.Context, event *nostr.Event) (bool, 
 // the relay owner. Signatures are verified before any policy runs, so the pubkey
 // on the event is proof enough that the owner sent it.
 func isOwnerDeleteRequest(event *nostr.Event) bool {
-	return event.Kind == nostr.KindDeletion && event.PubKey == config.OwnerPubKey
+	return event.Kind == nostr.KindDeletion && event.PubKey.Hex() == config.OwnerPubKey
 }
 
 // OwnerCanDeleteAnyEvent replaces khatru's default NIP-09 outcome, which only
 // lets authors delete their own events, so that the owner can delete anything
 // stored on their relay. Everybody else is still limited to their own events.
-func OwnerCanDeleteAnyEvent(_ context.Context, target *nostr.Event, deletion *nostr.Event) (bool, string) {
+// OwnerCanDeleteAnyEvent lets the relay owner delete anything stored on their
+// relay; everybody else is still limited to their own events. The successor
+// khatru's AllowDeleting hook answers with a bare bool, so the human-readable
+// reasons this function used to return now live only in the log.
+func OwnerCanDeleteAnyEvent(_ context.Context, target nostr.Event, deletion nostr.Event) bool {
 	// khatru handles delete requests before any reject policy runs, so this is
 	// where a banned pubkey is stopped from deleting anything
-	if isBanned(deletion.PubKey) {
-		slog.Debug("🚫 deletion rejected: user is banned", "event", target.ID, "pubkey", deletion.PubKey)
-		return false, "you are banned from this relay"
+	if isBanned(deletion.PubKey.Hex()) {
+		slog.Debug("🚫 deletion rejected: user is banned", "event", target.ID, "pubkey", deletion.PubKey.Hex())
+		return false
 	}
 
 	if target.PubKey == deletion.PubKey {
-		return true, ""
+		return true
 	}
 
-	if deletion.PubKey == config.OwnerPubKey {
-		slog.Info("🗑️ owner deleted an event", "event", target.ID, "kind", target.Kind, "author", target.PubKey)
-		return true, ""
+	if deletion.PubKey.Hex() == config.OwnerPubKey {
+		slog.Info("🗑️ owner deleted an event", "event", target.ID, "kind", target.Kind, "author", target.PubKey.Hex())
+		return true
 	}
 
-	slog.Debug("🚫 deletion rejected: user is not the author of the event", "event", target.ID, "pubkey", deletion.PubKey)
-	return false, "you are not the author of this event"
+	slog.Debug("🚫 deletion rejected: user is not the author of the event", "event", target.ID, "pubkey", deletion.PubKey.Hex())
+	return false
 }
 
 // MustNotBeDeleted rejects events that have already been deleted from db, so a
@@ -136,7 +140,7 @@ func OwnerCanDeleteAnyEvent(_ context.Context, target *nostr.Event, deletion *no
 func MustNotBeDeleted(db DBBackend) func(context.Context, *nostr.Event) (bool, string) {
 	return func(ctx context.Context, event *nostr.Event) (bool, string) {
 		if isDeleted(ctx, db, event) {
-			slog.Debug("🚫 event rejected: event has been deleted", "event", event.ID, "pubkey", event.PubKey)
+			slog.Debug("🚫 event rejected: event has been deleted", "event", event.ID, "pubkey", event.PubKey.Hex())
 			return true, "this event has been deleted"
 		}
 		return false, ""
@@ -173,11 +177,11 @@ func MustBeAnAllowedKind(relay string) func(context.Context, *nostr.Event) (bool
 		}
 
 		rs := management.get().relayOrEmpty(relay)
-		if slices.Contains(rs.DisallowedKinds, event.Kind) {
+		if slices.Contains(rs.DisallowedKinds, int(event.Kind)) {
 			slog.Debug("🚫 event rejected: disallowed kind", "event", event.ID, "kind", event.Kind)
 			return true, fmt.Sprintf("kind %d is not accepted by this relay", event.Kind)
 		}
-		if len(rs.AllowedKinds) > 0 && !slices.Contains(rs.AllowedKinds, event.Kind) {
+		if len(rs.AllowedKinds) > 0 && !slices.Contains(rs.AllowedKinds, int(event.Kind)) {
 			slog.Debug("🚫 event rejected: kind is not on the allow list", "event", event.ID, "kind", event.Kind)
 			return true, fmt.Sprintf("kind %d is not accepted by this relay", event.Kind)
 		}
@@ -205,7 +209,7 @@ func OverwriteRelayInfo(relay string) func(context.Context, *http.Request, nip11
 // simply put it back, which is the failure MustNotBeDeleted exists to prevent.
 func MustNotBeABannedEvent(relay string) func(context.Context, *nostr.Event) (bool, string) {
 	return func(_ context.Context, event *nostr.Event) (bool, string) {
-		if isBannedEvent(relay, event.ID) {
+		if isBannedEvent(relay, event.ID.Hex()) {
 			slog.Debug("🚫 event rejected: event is banned", "event", event.ID, "relay", relay)
 			return true, "this event is banned from this relay"
 		}
@@ -213,7 +217,7 @@ func MustNotBeABannedEvent(relay string) func(context.Context, *nostr.Event) (bo
 	}
 }
 
-var allowedChatKinds = map[int]struct{}{
+var allowedChatKinds = map[nostr.Kind]struct{}{
 	// Regular kinds
 	nostr.KindSimpleGroupChatMessage:   {},
 	nostr.KindSimpleGroupThreadedReply: {},

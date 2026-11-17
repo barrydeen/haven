@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 //
@@ -239,13 +239,13 @@ type eventBulkResult struct {
 // eventClass names what NIP-01 says happens to an event of this kind, which is
 // what the UI needs to explain a delete correctly: a replaceable event the owner
 // removes comes back the moment its author publishes a newer version.
-func eventClass(kind int) string {
+func eventClass(kind nostr.Kind) string {
 	switch {
-	case nostr.IsEphemeralKind(kind):
+	case kind.IsEphemeral():
 		return "ephemeral"
-	case nostr.IsAddressableKind(kind):
+	case kind.IsAddressable():
 		return "addressable"
-	case nostr.IsReplaceableKind(kind):
+	case kind.IsReplaceable():
 		return "replaceable"
 	default:
 		return "regular"
@@ -277,10 +277,10 @@ func rowFor(relay string, evt *nostr.Event) eventRow {
 	}
 
 	return eventRow{
-		ID:               evt.ID,
-		PubKey:           evt.PubKey,
+		ID:               evt.ID.Hex(),
+		PubKey:           evt.PubKey.Hex(),
 		CreatedAt:        int64(evt.CreatedAt),
-		Kind:             evt.Kind,
+		Kind:             int(evt.Kind),
 		Class:            eventClass(evt.Kind),
 		Content:          content,
 		Tags:             tags,
@@ -289,7 +289,7 @@ func rowFor(relay string, evt *nostr.Event) eventRow {
 		ContentTruncated: contentCut,
 		TagCount:         len(evt.Tags),
 		TagsTruncated:    tagsCut,
-		Banned:           isBannedEvent(relay, evt.ID),
+		Banned:           isBannedEvent(relay, evt.ID.Hex()),
 	}
 }
 
@@ -312,13 +312,17 @@ func resolveProfiles(ctx context.Context, relay string, rows []eventRow) map[str
 	}
 
 	seen := make(map[string]struct{}, len(rows))
-	authors := make([]string, 0, len(rows))
+	authors := make([]nostr.PubKey, 0, len(rows))
 	for _, row := range rows {
 		if _, ok := seen[row.PubKey]; ok {
 			continue
 		}
 		seen[row.PubKey] = struct{}{}
-		authors = append(authors, row.PubKey)
+		parsed, err := nostr.PubKeyFromHex(row.PubKey)
+		if err != nil {
+			continue
+		}
+		authors = append(authors, parsed)
 		if len(authors) >= maxProfileLookups {
 			break
 		}
@@ -338,16 +342,17 @@ func resolveProfiles(ctx context.Context, relay string, rows []eventRow) map[str
 	newest := make(map[string]nostr.Timestamp, len(authors))
 	for _, db := range sources {
 		filter := nostr.Filter{
-			Kinds:   []int{nostr.KindProfileMetadata},
+			Kinds:   []nostr.Kind{nostr.KindProfileMetadata},
 			Authors: authors,
 			Limit:   len(authors),
 		}
 		_, _, err := eachEvent(ctx, db, filter, maxProfileLookups*4, func(evt *nostr.Event) bool {
-			if at, ok := newest[evt.PubKey]; ok && at >= evt.CreatedAt {
+			pk := evt.PubKey.Hex()
+			if at, ok := newest[pk]; ok && at >= evt.CreatedAt {
 				return true
 			}
-			newest[evt.PubKey] = evt.CreatedAt
-			profiles[evt.PubKey] = json.RawMessage(evt.Content)
+			newest[pk] = evt.CreatedAt
+			profiles[pk] = json.RawMessage(evt.Content)
 			return true
 		})
 		if err != nil {
@@ -380,18 +385,42 @@ func listEvents(ctx context.Context, relay string, opts eventListOptions) (event
 	filter := nostr.Filter{}
 	// built as nil rather than as empty slices on purpose: the query planners
 	// branch on IDs != nil, so an empty but non-nil slice produces no queries at
-	// all and an empty result that looks like an honest one
+	// all and an empty result that looks like an honest one. The options keep
+	// their wire types (ints and hex strings, since/until pointers) and are
+	// converted here: the successor filter carries typed IDs, pubkeys and
+	// value timestamps.
 	if len(opts.Kinds) > 0 {
-		filter.Kinds = opts.Kinds
+		filter.Kinds = make([]nostr.Kind, 0, len(opts.Kinds))
+		for _, k := range opts.Kinds {
+			filter.Kinds = append(filter.Kinds, nostr.Kind(k))
+		}
 	}
 	if len(opts.Authors) > 0 {
-		filter.Authors = opts.Authors
+		filter.Authors = make([]nostr.PubKey, 0, len(opts.Authors))
+		for _, a := range opts.Authors {
+			parsed, err := nostr.PubKeyFromHex(a)
+			if err != nil {
+				return eventListResult{}, fmt.Errorf("invalid author pubkey %q: %w", a, err)
+			}
+			filter.Authors = append(filter.Authors, parsed)
+		}
 	}
 	if len(opts.IDs) > 0 {
-		filter.IDs = opts.IDs
+		filter.IDs = make([]nostr.ID, 0, len(opts.IDs))
+		for _, id := range opts.IDs {
+			parsed, err := nostr.IDFromHex(id)
+			if err != nil {
+				return eventListResult{}, fmt.Errorf("invalid event id %q: %w", id, err)
+			}
+			filter.IDs = append(filter.IDs, parsed)
+		}
 	}
-	filter.Since = opts.Since
-	filter.Until = opts.Until
+	if opts.Since != nil {
+		filter.Since = *opts.Since
+	}
+	if opts.Until != nil {
+		filter.Until = *opts.Until
+	}
 
 	result := eventListResult{Relay: relay, Events: []eventRow{}}
 
@@ -401,8 +430,7 @@ func listEvents(ctx context.Context, relay string, opts eventListOptions) (event
 		if err != nil {
 			return eventListResult{}, err
 		}
-		until := nostr.Timestamp(cursor.Until)
-		filter.Until = &until
+		filter.Until = nostr.Timestamp(cursor.Until)
 		for _, id := range cursor.Seen {
 			skip[id] = struct{}{}
 		}
@@ -427,13 +455,13 @@ func listEvents(ctx context.Context, relay string, opts eventListOptions) (event
 		}
 		if at == tailAt {
 			if len(tailIDs) < maxCursorSeen {
-				tailIDs = append(tailIDs, evt.ID)
+				tailIDs = append(tailIDs, evt.ID.Hex())
 			} else {
 				crowded = true
 			}
 		}
 
-		if _, skipped := skip[evt.ID]; skipped {
+		if _, skipped := skip[evt.ID.Hex()]; skipped {
 			return true
 		}
 		if needle != "" && !strings.Contains(strings.ToLower(evt.Content), needle) {
@@ -504,8 +532,8 @@ func getEvent(ctx context.Context, relay, id string) (eventDetail, error) {
 	if detail.Banned {
 		detail.BanReason = management.get().relayOrEmpty(relay).BannedEvents[id]
 	}
-	if !nostr.IsRegularKind(evt.Kind) {
-		detail.Address = fmt.Sprintf("%d:%s:%s", evt.Kind, evt.PubKey, evt.Tags.GetD())
+	if !evt.Kind.IsRegular() {
+		detail.Address = fmt.Sprintf("%d:%s:%s", evt.Kind, evt.PubKey.Hex(), evt.Tags.GetD())
 	}
 	detail.Permanent = permanentlyGone(evt, detail.Banned, detail.Deleted)
 	return detail, nil
@@ -521,7 +549,7 @@ func permanentlyGone(evt *nostr.Event, banned, deleted bool) bool {
 	if banned {
 		return true
 	}
-	return deleted && nostr.IsRegularKind(evt.Kind)
+	return deleted && evt.Kind.IsRegular()
 }
 
 // deleteEvents removes stored events by id.
@@ -556,8 +584,8 @@ func deleteEvents(ctx context.Context, relay string, ids []string) (eventBulkRes
 
 		row := eventDeleteResult{
 			ID:        id,
-			Kind:      evt.Kind,
-			PubKey:    evt.PubKey,
+			Kind:      int(evt.Kind),
+			PubKey:    evt.PubKey.Hex(),
 			Class:     eventClass(evt.Kind),
 			Permanent: permanent,
 		}

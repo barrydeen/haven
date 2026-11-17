@@ -3,7 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bufio"
-	"cmp"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fiatjaf/eventstore"
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/eventstore"
 )
 
 func (z *zipWriter) close() {
@@ -227,7 +227,7 @@ func exportDB(ctx context.Context, db DBBackend, w io.Writer) error {
 			Limit: limit,
 		}
 		if lastTimestamp != 0 {
-			filter.Until = &lastTimestamp
+			filter.Until = lastTimestamp
 		}
 
 		events, err := db.QueryEvents(ctx, filter)
@@ -256,7 +256,7 @@ func exportDB(ctx context.Context, db DBBackend, w io.Writer) error {
 			//    if the original source had duplicates (e.g. due to bugs in older versions
 			//    of eventstore and khatru).
 			pos, found := slices.BinarySearchFunc(eventBuffer, event, func(a, b *nostr.Event) int {
-				return cmp.Compare(a.ID, b.ID)
+				return bytes.Compare(a.ID[:], b.ID[:])
 			})
 			if !found {
 				eventBuffer = slices.Insert(eventBuffer, pos, event)

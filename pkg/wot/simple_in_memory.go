@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 	"github.com/puzpuzpuz/xsync/v4"
 )
 
@@ -20,7 +20,7 @@ type SimpleInMemory struct {
 	pubkeys atomic.Pointer[map[string]bool]
 
 	// Dependencies for Refresh
-	Pool *nostr.SimplePool
+	Pool *nostr.Pool
 	// WhitelistedPubKeys supplies the seed set on every refresh. It is a
 	// function rather than a map because the set can grow at runtime, and
 	// because returning a fresh map each call keeps the refresher off a map the
@@ -32,7 +32,7 @@ type SimpleInMemory struct {
 	WotFetchTimeout    int
 }
 
-func NewSimpleInMemory(pool *nostr.SimplePool, whitelistedPubKeys func() map[string]struct{}, seedRelays []string, wotDepth int, minFollowers int, wotFetchTimeout int) *SimpleInMemory {
+func NewSimpleInMemory(pool *nostr.Pool, whitelistedPubKeys func() map[string]struct{}, seedRelays []string, wotDepth int, minFollowers int, wotFetchTimeout int) *SimpleInMemory {
 	return &SimpleInMemory{
 		Pool:               pool,
 		WhitelistedPubKeys: whitelistedPubKeys,
@@ -104,14 +104,24 @@ func (wt *SimpleInMemory) Refresh(ctx context.Context) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	seedKeys := make([]nostr.PubKey, 0, len(seeds))
+	for hexKey := range seeds {
+		parsed, err := nostr.PubKeyFromHex(hexKey)
+		if err != nil {
+			slog.Warn("🚫 skipping invalid whitelist pubkey while building WoT", "pubkey", hexKey, "error", err)
+			continue
+		}
+		seedKeys = append(seedKeys, parsed)
+	}
+
 	filter := nostr.Filter{
-		Authors: slices.Collect(maps.Keys(seeds)),
-		Kinds:   []int{nostr.KindFollowList},
+		Authors: seedKeys,
+		Kinds:   []nostr.Kind{nostr.KindFollowList},
 	}
 
 	slog.Info("🛜 fetching Nostr events to build WoT")
 
-	events := wt.Pool.FetchMany(timeoutCtx, wt.SeedRelays, filter)
+	events := wt.Pool.FetchMany(timeoutCtx, wt.SeedRelays, filter, nostr.SubscriptionOptions{})
 	for ev := range latestEventByKindAndPubkey(timeoutCtx, events, &eventsAnalysed) {
 		for contact := range ev.Tags.FindAll("p") {
 			if len(contact) > 1 {
@@ -136,15 +146,25 @@ func (wt *SimpleInMemory) Refresh(ctx context.Context) {
 		timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 		done := make(chan struct{})
 
+		batchKeys := make([]nostr.PubKey, 0, len(pubkeys))
+		for _, hexKey := range pubkeys {
+			parsed, err := nostr.PubKeyFromHex(hexKey)
+			if err != nil {
+				slog.Warn("🚫 skipping invalid pubkey while building WoT", "pubkey", hexKey, "error", err)
+				continue
+			}
+			batchKeys = append(batchKeys, parsed)
+		}
+
 		filter := nostr.Filter{
-			Authors: pubkeys,
-			Kinds:   []int{nostr.KindFollowList, nostr.KindRelayListMetadata},
+			Authors: batchKeys,
+			Kinds:   []nostr.Kind{nostr.KindFollowList, nostr.KindRelayListMetadata},
 		}
 
 		go func() {
 			defer cancel()
 
-			events := wt.Pool.FetchMany(timeoutCtx, wt.SeedRelays, filter)
+			events := wt.Pool.FetchMany(timeoutCtx, wt.SeedRelays, filter, nostr.SubscriptionOptions{})
 			for ev := range latestEventByKindAndPubkey(timeoutCtx, events, &eventsAnalysed) {
 				for contact := range ev.Tags.FindAll("p") {
 					if len(contact) > 1 {

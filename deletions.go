@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 // isDeleted reports whether db holds a NIP-09 delete request covering the event.
@@ -17,24 +17,29 @@ import (
 func isDeleted(ctx context.Context, db DBBackend, event *nostr.Event) bool {
 	// only the author of an event and the relay owner can delete it, so a delete
 	// request from anybody else doesn't count
-	authors := []string{event.PubKey, config.OwnerPubKey}
+	ownerKey, err := nostr.PubKeyFromHex(config.OwnerPubKey)
+	if err != nil {
+		slog.Error("🚫 owner pubkey is not valid hex; delete requests cannot be matched", "error", err)
+		return false
+	}
+	authors := []nostr.PubKey{event.PubKey, ownerKey}
 
 	filters := []nostr.Filter{{
-		Kinds:   []int{nostr.KindDeletion},
+		Kinds:   []nostr.Kind{nostr.KindDeletion},
 		Authors: authors,
-		Tags:    nostr.TagMap{"e": []string{event.ID}},
+		Tags:    nostr.TagMap{"e": []string{event.ID.Hex()}},
 		Limit:   1,
 	}}
 
 	// replaceable and addressable events are also deleted by address, and such a
 	// request only covers the versions that existed when it was made
-	if !nostr.IsRegularKind(event.Kind) {
-		address := fmt.Sprintf("%d:%s:%s", event.Kind, event.PubKey, event.Tags.GetD())
+	if !event.Kind.IsRegular() {
+		address := fmt.Sprintf("%d:%s:%s", event.Kind, event.PubKey.Hex(), event.Tags.GetD())
 		filters = append(filters, nostr.Filter{
-			Kinds:   []int{nostr.KindDeletion},
+			Kinds:   []nostr.Kind{nostr.KindDeletion},
 			Authors: authors,
 			Tags:    nostr.TagMap{"a": []string{address}},
-			Since:   &event.CreatedAt,
+			Since:   event.CreatedAt,
 			Limit:   1,
 		})
 	}

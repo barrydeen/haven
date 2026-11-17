@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 // nip98MaxClockSkew is how far the auth event's created_at may be from ours.
@@ -52,7 +52,7 @@ func verifyNIP98(r *http.Request, body []byte, serviceURL string) (string, error
 	if !event.CheckID() {
 		return "", errors.New("auth event id does not match its contents")
 	}
-	if ok, err := event.CheckSignature(); !ok || err != nil {
+	if !event.VerifySignature() {
 		return "", errors.New("auth event signature is invalid")
 	}
 
@@ -87,7 +87,7 @@ func verifyNIP98(r *http.Request, body []byte, serviceURL string) (string, error
 			abs(int64(event.CreatedAt)-int64(now)), nip98MaxClockSkew)
 	}
 
-	return event.PubKey, nil
+	return event.PubKey.Hex(), nil
 }
 
 // sameServiceURL reports whether a NIP-98 u tag addresses this relay. The

@@ -6,22 +6,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fiatjaf/eventstore/lmdb"
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/eventstore/lmdb"
 )
 
-// newTestDB builds a real lmdb store in a temp directory with a deliberately
-// tiny page limit, so a few dozen events exercise the same multi-page cursor
-// walk that a real database only reaches in the tens of thousands.
-func newTestDB(t *testing.T, maxLimit int) DBBackend {
+// newTestDB builds a real lmdb store in a temp directory. The old backend
+// carried a per-backend MaxLimit cap; the successor takes the limit per query
+// (eachEvent's budget is that cap), so there is nothing to set here any more.
+func newTestDB(t *testing.T) DBBackend {
 	t.Helper()
-	db := &lmdb.LMDBBackend{
+	db := storeBackend{store: &lmdb.LMDBBackend{
 		Path: t.TempDir(),
 		// small, because the default reserves 256GiB of address space and a test
 		// has no use for it
-		MapSize:  1 << 28,
-		MaxLimit: maxLimit,
-	}
+		MapSize: 1 << 28,
+	}}
 	if err := db.Init(); err != nil {
 		t.Fatalf("init lmdb: %v", err)
 	}
@@ -33,7 +32,7 @@ func newTestDB(t *testing.T, maxLimit int) DBBackend {
 // in the order they were written.
 func seedEvents(t *testing.T, db DBBackend, createdAt []nostr.Timestamp) []string {
 	t.Helper()
-	sk := nostr.GeneratePrivateKey()
+	sk := nostr.Generate()
 	ids := make([]string, 0, len(createdAt))
 	for i, ts := range createdAt {
 		evt := &nostr.Event{
@@ -48,7 +47,7 @@ func seedEvents(t *testing.T, db DBBackend, createdAt []nostr.Timestamp) []strin
 		if err := db.SaveEvent(context.Background(), evt); err != nil {
 			t.Fatalf("save: %v", err)
 		}
-		ids = append(ids, evt.ID)
+		ids = append(ids, evt.ID.Hex())
 	}
 	return ids
 }
@@ -59,7 +58,7 @@ func seedEvents(t *testing.T, db DBBackend, createdAt []nostr.Timestamp) []strin
 // twice, and one that steps the cursor back a second to avoid the overlap loses
 // them instead. Both failures are silent.
 func TestEachEventVisitsEveryEventExactlyOnce(t *testing.T) {
-	db := newTestDB(t, 10)
+	db := newTestDB(t)
 
 	// spread over distinct seconds, so this is purely about page boundaries
 	stamps := make([]nostr.Timestamp, 0, 95)
@@ -70,7 +69,7 @@ func TestEachEventVisitsEveryEventExactlyOnce(t *testing.T) {
 
 	counts := map[string]int{}
 	scanned, complete, err := eachEvent(context.Background(), db, nostr.Filter{}, 0, func(evt *nostr.Event) bool {
-		counts[evt.ID]++
+		counts[evt.ID.Hex()]++
 		return true
 	})
 	if err != nil {
@@ -93,13 +92,13 @@ func TestEachEventVisitsEveryEventExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestEachEventHandlesACrowdedSecond covers the case the walker warns about:
-// more events sharing one second than a page can hold. created_at is the finest
-// cursor there is, so the walk has to step over that second to make progress and
-// some events are knowingly lost — but it must terminate, and it must not loop
-// forever refetching the same page.
+// TestEachEventHandlesACrowdedSecond covers the case the old paged walker had to
+// special-case: more events sharing one second than a page could hold made
+// created_at the finest cursor there is, and stepping over that second knowingly
+// lost events. The successor walk is a single pass, so it must visit every event
+// exactly once regardless of how crowded a second is.
 func TestEachEventHandlesACrowdedSecond(t *testing.T) {
-	db := newTestDB(t, 4)
+	db := newTestDB(t)
 
 	stamps := make([]nostr.Timestamp, 0, 30)
 	for range 20 {
@@ -115,7 +114,7 @@ func TestEachEventHandlesACrowdedSecond(t *testing.T) {
 	go func() {
 		defer close(done)
 		_, _, err := eachEvent(context.Background(), db, nostr.Filter{}, 0, func(evt *nostr.Event) bool {
-			seen[evt.ID]++
+			seen[evt.ID.Hex()]++
 			return true
 		})
 		if err != nil {
@@ -129,14 +128,13 @@ func TestEachEventHandlesACrowdedSecond(t *testing.T) {
 		t.Fatal("eachEvent did not terminate on a crowded second")
 	}
 
+	if len(seen) != 30 {
+		t.Errorf("%d distinct events visited, want all 30", len(seen))
+	}
 	for id, n := range seen {
 		if n != 1 {
 			t.Errorf("event %s visited %d times", id[:8], n)
 		}
-	}
-	// the ten uncrowded events are above the crowded second and must all survive
-	if len(seen) < 10 {
-		t.Errorf("only %d distinct events visited; the events above the crowded second should all be there", len(seen))
 	}
 }
 
@@ -144,7 +142,7 @@ func TestEachEventHandlesACrowdedSecond(t *testing.T) {
 // rest of the database, so "stopped early" must not be reported as "reached the
 // end".
 func TestEachEventStopsWhenVisitSaysSo(t *testing.T) {
-	db := newTestDB(t, 10)
+	db := newTestDB(t)
 	stamps := make([]nostr.Timestamp, 0, 40)
 	for i := range 40 {
 		stamps = append(stamps, nostr.Timestamp(1700000000+i))
@@ -171,7 +169,7 @@ func TestEachEventStopsWhenVisitSaysSo(t *testing.T) {
 // content search, so running out of it must be reported as not-complete rather
 // than as an honest end of range.
 func TestEachEventRespectsTheBudget(t *testing.T) {
-	db := newTestDB(t, 10)
+	db := newTestDB(t)
 	stamps := make([]nostr.Timestamp, 0, 40)
 	for i := range 40 {
 		stamps = append(stamps, nostr.Timestamp(1700000000+i))
@@ -197,7 +195,7 @@ func TestEachEventRespectsTheBudget(t *testing.T) {
 // nothing in it, so passing one through would report an empty result as a real
 // one.
 func TestEachEventRefusesToSearch(t *testing.T) {
-	db := newTestDB(t, 10)
+	db := newTestDB(t)
 	seedEvents(t, db, []nostr.Timestamp{1700000000})
 
 	_, _, err := eachEvent(context.Background(), db, nostr.Filter{Search: "anything"}, 0, func(*nostr.Event) bool {
@@ -211,24 +209,25 @@ func TestEachEventRefusesToSearch(t *testing.T) {
 
 // TestClampFilterTimestamps: both query planners narrow these to uint32, so a
 // bound outside that range wraps and the query comes back empty with no error.
-// An out of range bound has to behave like no bound.
+// An out of range bound has to behave like no bound (0 is the successor
+// filter's "no bound").
 func TestClampFilterTimestamps(t *testing.T) {
 	tooBig := nostr.Timestamp(99999999999)
 	negative := nostr.Timestamp(-1)
 	fine := nostr.Timestamp(1700000000)
 
-	f := nostr.Filter{Until: &tooBig, Since: &negative}
+	f := nostr.Filter{Until: tooBig, Since: negative}
 	clampFilterTimestamps(&f)
-	if f.Until != nil {
-		t.Errorf("Until = %v, want nil for an out of range bound", *f.Until)
+	if f.Until != 0 {
+		t.Errorf("Until = %v, want 0 for an out of range bound", f.Until)
 	}
-	if f.Since != nil {
-		t.Errorf("Since = %v, want nil for a negative bound", *f.Since)
+	if f.Since != 0 {
+		t.Errorf("Since = %v, want 0 for a negative bound", f.Since)
 	}
 
-	f = nostr.Filter{Until: &fine}
+	f = nostr.Filter{Until: fine}
 	clampFilterTimestamps(&f)
-	if f.Until == nil || *f.Until != fine {
+	if f.Until != fine {
 		t.Error("a bound inside the range was cleared")
 	}
 }
@@ -237,7 +236,7 @@ func TestClampFilterTimestamps(t *testing.T) {
 // holds, because both backends derive the index keys to remove from its own
 // fields. It must also not invent entries for ids that were not there.
 func TestFindStoredEventsReturnsWholeEvents(t *testing.T) {
-	db := newTestDB(t, 10)
+	db := newTestDB(t)
 	ids := seedEvents(t, db, []nostr.Timestamp{1700000001, 1700000002, 1700000003})
 
 	missing := "0000000000000000000000000000000000000000000000000000000000000000"
@@ -254,10 +253,10 @@ func TestFindStoredEventsReturnsWholeEvents(t *testing.T) {
 			t.Errorf("event %s was not found", id[:8])
 			continue
 		}
-		if evt.ID != id {
-			t.Errorf("event keyed %s carries id %s", id[:8], evt.ID[:8])
+		if evt.ID.Hex() != id {
+			t.Errorf("event keyed %s carries id %s", id[:8], evt.ID.Hex()[:8])
 		}
-		if evt.Sig == "" || evt.PubKey == "" {
+		if evt.Sig == [64]byte{} || evt.PubKey == nostr.ZeroPK {
 			t.Errorf("event %s came back without its signature or author", id[:8])
 		}
 	}
@@ -281,7 +280,7 @@ func TestFindStoredEventsReturnsWholeEvents(t *testing.T) {
 // that hangs on first use. If this test ever starts failing because the walk is
 // no longer needed, check the upstream fix before deleting countStoredEvents.
 func TestCountStoredEventsTerminatesOnEveryBackend(t *testing.T) {
-	db := newTestDB(t, 10)
+	db := newTestDB(t)
 	seedEvents(t, db, []nostr.Timestamp{1700000001, 1700000002, 1700000003})
 
 	done := make(chan struct{})
@@ -309,13 +308,5 @@ func TestCountStoredEventsTerminatesOnEveryBackend(t *testing.T) {
 	}
 	if !exact {
 		t.Error("a three event store was reported as an inexact count")
-	}
-}
-
-// TestBackendCountsSafelyKnowsAboutLmdb pins the decision itself, so flipping it
-// by accident fails here rather than by hanging a production relay.
-func TestBackendCountsSafelyKnowsAboutLmdb(t *testing.T) {
-	if backendCountsSafely(newTestDB(t, 10)) {
-		t.Error("lmdb was reported as safe to count with; its CountEvents does not terminate")
 	}
 }

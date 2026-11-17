@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"log/slog"
 	"maps"
 	"mime"
@@ -18,8 +19,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fiatjaf/khatru/blossom"
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/khatru/blossom"
+	nipb7blossom "fiatjaf.com/nostr/nipb7/blossom"
 )
 
 //
@@ -206,7 +208,7 @@ func parseBlobIndexEvent(evt *nostr.Event) (blobIndexEntry, bool) {
 	}
 
 	entry := blobIndexEntry{
-		Owner:    evt.PubKey,
+		Owner:    evt.PubKey.Hex(),
 		SHA256:   hash,
 		Uploaded: evt.CreatedAt,
 	}
@@ -225,7 +227,7 @@ func parseBlobIndexEvent(evt *nostr.Event) (blobIndexEntry, bool) {
 // cursor range with no limit of its own, which is what makes it a usable check
 // on a listing that silently truncates.
 func countBlobIndexEvents(ctx context.Context) (int64, error) {
-	return blossomDB.CountEvents(ctx, nostr.Filter{Kinds: []int{blobIndexKind}})
+	return blossomDB.CountEvents(ctx, nostr.Filter{Kinds: []nostr.Kind{blobIndexKind}})
 }
 
 //
@@ -358,7 +360,7 @@ func buildBlobInventory(ctx context.Context) ([]blobEntry, blobStats, error) {
 	owners := make(map[string]map[string]struct{}, len(disk))
 	uploaders := make(map[string]struct{})
 
-	visited, _, err := eachEvent(ctx, blossomDB, nostr.Filter{Kinds: []int{blobIndexKind}}, maxAggregateScan, func(evt *nostr.Event) bool {
+	visited, _, err := eachEvent(ctx, blossomDB, nostr.Filter{Kinds: []nostr.Kind{blobIndexKind}}, maxAggregateScan, func(evt *nostr.Event) bool {
 		parsed, ok := parseBlobIndexEvent(evt)
 		if !ok {
 			stats.SkippedIndexEntries++
@@ -591,41 +593,33 @@ type havenBlobIndex struct {
 	blossom.EventStoreBlobIndexWrapper
 }
 
-func (ix havenBlobIndex) Keep(ctx context.Context, blob blossom.BlobDescriptor, pubkey string) error {
+func (ix havenBlobIndex) Keep(ctx context.Context, blob nipb7blossom.BlobDescriptor, pubkey nostr.PubKey) error {
 	if isBlockedBlob(blob.SHA256) {
-		slog.Info("🚫 refused a blocked blob", "sha256", blob.SHA256, "pubkey", pubkey)
+		slog.Info("🚫 refused a blocked blob", "sha256", blob.SHA256, "pubkey", pubkey.Hex())
 		return errors.New("this blob is blocked by the relay owner")
 	}
 	return ix.EventStoreBlobIndexWrapper.Keep(ctx, blob, pubkey)
 }
 
-func (ix havenBlobIndex) Get(ctx context.Context, sha256 string) (*blossom.BlobDescriptor, error) {
+func (ix havenBlobIndex) Get(ctx context.Context, sha256 string) (*nipb7blossom.BlobDescriptor, error) {
 	if isBlockedBlob(sha256) {
 		return nil, nil
 	}
 	return ix.EventStoreBlobIndexWrapper.Get(ctx, sha256)
 }
 
-func (ix havenBlobIndex) List(ctx context.Context, pubkey string) (chan blossom.BlobDescriptor, error) {
-	upstream, err := ix.EventStoreBlobIndexWrapper.List(ctx, pubkey)
-	if err != nil {
-		return nil, err
-	}
-
-	// a relay goroutine rather than a second query. khatru's list handler always
-	// drains what it is given, so this cannot be stranded; anything else calling
-	// it has to drain too.
-	filtered := make(chan blossom.BlobDescriptor)
-	go func() {
-		defer close(filtered)
-		for blob := range upstream {
+// List keeps the blocklist in front of the wrapper's listing. The successor
+// interface is a pull iterator, so a blocked blob is skipped by returning true
+// to keep pulling rather than by filtering a channel.
+func (ix havenBlobIndex) List(ctx context.Context, pubkey nostr.PubKey) iter.Seq[nipb7blossom.BlobDescriptor] {
+	return func(yield func(nipb7blossom.BlobDescriptor) bool) {
+		ix.EventStoreBlobIndexWrapper.List(ctx, pubkey)(func(blob nipb7blossom.BlobDescriptor) bool {
 			if isBlockedBlob(blob.SHA256) {
-				continue
+				return true
 			}
-			filtered <- blob
-		}
-	}()
-	return filtered, nil
+			return yield(blob)
+		})
+	}
 }
 
 //
@@ -684,7 +678,7 @@ func deleteBlobs(ctx context.Context, hashes []string, block bool, reason string
 	// planners route an x tag to the kind index with the tag as a post filter,
 	// so a per-hash query would cost a full index walk each.
 	var doomed []*nostr.Event
-	if _, _, err := eachEvent(ctx, blossomDB, nostr.Filter{Kinds: []int{blobIndexKind}}, maxAggregateScan, func(evt *nostr.Event) bool {
+	if _, _, err := eachEvent(ctx, blossomDB, nostr.Filter{Kinds: []nostr.Kind{blobIndexKind}}, maxAggregateScan, func(evt *nostr.Event) bool {
 		parsed, ok := parseBlobIndexEvent(evt)
 		if !ok {
 			return true
