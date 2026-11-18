@@ -34,6 +34,15 @@ func main() {
 	_ = godotenv.Load(".env") // missing file is a clean checkout's normal state
 	config = loadConfig()
 
+	// before initRelays/initDBs open the backends: this re-encodes raw event
+	// blobs written by the deprecated eventstore codec in place, and drops the
+	// successor backend's version so its own reindex runs on the next Init. A
+	// failure here must not stop the relay from booting: new events would still
+	// store fine, only legacy history would be unreadable.
+	if _, err := migrateLegacyRawEvents([]string{"db/private", "db/chat", "db/outbox", "db/inbox", "db/blossom"}); err != nil {
+		log.Printf("legacy lmdb migration failed (continuing): %v", err)
+	}
+
 	nostr.InfoLogger = log.New(io.Discard, "", 0)
 	slog.SetLogLoggerLevel(getLogLevelFromConfig())
 	green := "\033[32m"
